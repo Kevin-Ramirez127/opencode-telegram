@@ -48,10 +48,12 @@ The daemon discovers the local OpenCode service from
 subscribes to the filtered event stream. It reconnects with backoff and
 reconciles pending forms/permissions after a reconnect.
 
-The companion plugin lives in
-[`opencode-tools`](https://github.com/Kevin-Ramirez127/opencode-tools) at
-`plugins/opencode-telegram`. It edits the daemon settings through a loopback
-HTTP API.
+The companion plugin lives in this repository at
+`plugins/opencode-telegram`. The
+[`opencode-tools`](https://github.com/Kevin-Ramirez127/opencode-tools)
+repository links to it with a `plugins/opencode-telegram` symlink, so existing
+config paths there keep working. The plugin edits the daemon settings through
+a loopback HTTP API.
 
 ---
 
@@ -161,7 +163,7 @@ Notifications are controlled from the OpenCode plugin:
 {
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
-    "/home/<you>/opencode-tools/plugins/opencode-telegram"
+    "/home/<you>/telegram-pc-remote/plugins/opencode-telegram"
   ]
 }
 ```
@@ -323,6 +325,7 @@ internal/settings           settings file + validation
 internal/whitelist          fail-closed user/chat allowlist
 internal/ratelimit          one update per chat per second
 internal/safeio             atomic 0600 writes
+plugins/opencode-telegram   OpenCode TUI settings plugin
 scripts/daemon.sh           start/stop/logs/config/settings
 packaging/                  systemd user unit
 ```

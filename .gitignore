@@ -8,6 +8,7 @@
 /dist/
 *.log
 /.run/
+node_modules/
 
 # Backups / temporary files created by scripts
 data/*.bak
