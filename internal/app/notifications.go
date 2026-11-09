@@ -183,20 +183,12 @@ func (a *App) fetchSession(sessionID string) (occlient.Session, error) {
 func (a *App) lastAssistantText(sessionID string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	messages, err := a.oc.ListMessages(ctx, sessionID)
+	text, err := a.oc.LastAssistantText(ctx, sessionID)
 	if err != nil {
-		log.Printf("notification: could not list messages for %s: %v", sessionID, err)
+		log.Printf("notification: could not read messages for %s: %v", sessionID, err)
 		return ""
 	}
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Type != "assistant" {
-			continue
-		}
-		if text := messages[i].FinalText(); text != "" {
-			return text
-		}
-	}
-	return ""
+	return text
 }
 
 func sessionDuration(s occlient.Session) string {

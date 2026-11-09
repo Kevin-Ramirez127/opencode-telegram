@@ -335,6 +335,29 @@ func (c *Client) ListMessages(ctx context.Context, sessionID string) ([]Message,
 	return out.Data, err
 }
 
+// LastAssistantText returns the newest assistant text in a session. Asking the
+// server for a descending, assistant-only page avoids downloading the whole
+// transcript just for a notification preview.
+func (c *Client) LastAssistantText(ctx context.Context, sessionID string) (string, error) {
+	q := url.Values{}
+	q.Set("limit", "20")
+	q.Set("order", "desc")
+	q.Set("type", "assistant")
+	var out struct {
+		Data []Message `json:"data"`
+	}
+	path := "/api/session/" + url.PathEscape(sessionID) + "/message?" + q.Encode()
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return "", err
+	}
+	for _, m := range out.Data {
+		if text := m.FinalText(); text != "" {
+			return text, nil
+		}
+	}
+	return "", nil
+}
+
 func (c *Client) ListForms(ctx context.Context, sessionID string) ([]Form, error) {
 	var out struct {
 		Data []Form `json:"data"`

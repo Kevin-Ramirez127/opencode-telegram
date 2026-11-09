@@ -33,6 +33,13 @@ func TestLive(t *testing.T) {
 		t.Fatalf("sessions: %v", err)
 	}
 	t.Logf("listed %d session(s)", len(sessions))
+	if len(sessions) > 0 {
+		text, err := c.LastAssistantText(ctx, sessions[0].ID)
+		if err != nil {
+			t.Fatalf("last assistant text: %v", err)
+		}
+		t.Logf("last assistant text: %.80q", text)
+	}
 
 	streamCtx, stop := context.WithTimeout(context.Background(), 3*time.Second)
 	defer stop()
