@@ -266,6 +266,23 @@ func TestCustomFormAnswerRequiresSetting(t *testing.T) {
 	}
 }
 
+func TestDoneNotificationSuppressedWhileQuestionPending(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+	form := `{"form":{"id":"frm_wait","sessionID":"ses_1","title":"Need input","fields":[` +
+		`{"key":"ok","title":"OK?","type":"boolean","required":true}]}}`
+	a.handleEvent(occlient.Event{Type: "form.created", Data: []byte(form)})
+	a.handleEvent(occlient.Event{Type: "session.execution.succeeded", Data: []byte(`{"sessionID":"ses_1"}`)})
+	if strings.Contains(ftg.allText(), "session finished") {
+		t.Fatal("session-finished notification must wait while a question is pending")
+	}
+
+	a.handleFormSettled("frm_wait", "cancelled")
+	a.handleEvent(occlient.Event{Type: "session.execution.succeeded", Data: []byte(`{"sessionID":"ses_1"}`)})
+	if !strings.Contains(ftg.allText(), "session finished") {
+		t.Fatal("expected a session-finished notification after the question settled")
+	}
+}
+
 func TestPermissionFlow(t *testing.T) {
 	a, _, foc := newIntegrationApp(t)
 	a.handleEvent(occlient.Event{

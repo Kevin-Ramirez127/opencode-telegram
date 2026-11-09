@@ -102,7 +102,14 @@ func (a *App) eventWorker(ctx context.Context) {
 			return
 		case ev := <-a.updates:
 			a.noteEvent()
-			a.handleEvent(ev)
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("panic while handling event %s: %v", ev.Type, r)
+					}
+				}()
+				a.handleEvent(ev)
+			}()
 		}
 	}
 }

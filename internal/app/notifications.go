@@ -48,6 +48,12 @@ func (a *App) notifySession(sessionID, kind, detail string) {
 		a.finishRun(sessionID, kind, false)
 		return
 	}
+	// Do not claim a session is finished while it is actually waiting for a
+	// human answer or permission decision.
+	if a.hasPendingHumanInput(sessionID) {
+		a.finishRun(sessionID, kind, false)
+		return
+	}
 	// Guard against duplicate frames for the same run/kind.
 	if !a.markOnce("session:"+sessionID+":"+kind, 10*time.Second) {
 		a.finishRun(sessionID, kind, false)
@@ -131,6 +137,23 @@ func (a *App) finishRun(sessionID, kind string, notified bool) {
 	if notified {
 		st.LastSeen = time.Now()
 	}
+}
+
+func (a *App) hasPendingHumanInput(sessionID string) bool {
+	now := time.Now()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, flow := range a.forms {
+		if flow.SessionID == sessionID {
+			return true
+		}
+	}
+	for _, act := range a.actions {
+		if act.Kind == "perm" && act.SessionID == sessionID && now.Before(act.Expires) {
+			return true
+		}
+	}
+	return false
 }
 
 func enabledFor(n settings.Notifications, key string) bool {
