@@ -3,8 +3,8 @@
 A TUI plugin that controls the `opencode-telegram` notification daemon from
 inside OpenCode.
 
-The daemon itself is a separate Go application. This plugin adds a
-`/telegram` slash command and a palette command,
+The daemon is the Go application at the root of this repository. This plugin
+adds a `/telegram` slash command and a palette command,
 **OpenCode Telegram notifications**, which opens a settings picker:
 
 - master notification switch (off by default);
