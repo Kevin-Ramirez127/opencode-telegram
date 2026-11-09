@@ -138,6 +138,11 @@ Discovery paths, in order:
 In a DM the user id and chat id are the same, so `config --adduser` adds the id
 to both lists. For a group/channel use `config --addchat <chat-id>` as well.
 
+`data/allowlist.json` and `data/settings.json` are local state and are
+gitignored; the tracked templates are `data/allowlist.example.json` and
+`data/settings.example.json`. `./install.sh` seeds the local files on first
+install.
+
 The daemon is fail-closed: a missing or corrupt file denies everyone, and
 unauthorized updates are dropped silently.
 
@@ -163,7 +168,7 @@ Notifications are controlled from the OpenCode plugin:
 {
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
-    "/home/<you>/telegram-pc-remote/plugins/opencode-telegram"
+    "/home/<you>/opencode-telegram/plugins/opencode-telegram"
   ]
 }
 ```
@@ -326,6 +331,8 @@ internal/whitelist          fail-closed user/chat allowlist
 internal/ratelimit          one update per chat per second
 internal/safeio             atomic 0600 writes
 plugins/opencode-telegram   OpenCode TUI settings plugin
+data/*.example.json         tracked allowlist/settings templates
+data/*.json                 local state (gitignored)
 scripts/daemon.sh           start/stop/logs/config/settings
 packaging/                  systemd user unit
 ```

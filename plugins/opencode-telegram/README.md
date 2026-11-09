@@ -39,7 +39,7 @@ Add the plugin to `opencode.json(c)` (project or global):
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugins": ["/home/<you>/telegram-pc-remote/plugins/opencode-telegram"]
+  "plugins": ["/home/<you>/opencode-telegram/plugins/opencode-telegram"]
 }
 ```
 
@@ -59,7 +59,7 @@ it with plugin options or environment variables:
 {
   "plugins": [
     {
-      "package": "/home/<you>/telegram-pc-remote/plugins/opencode-telegram",
+      "package": "/home/<you>/opencode-telegram/plugins/opencode-telegram",
       "options": {
         "daemonUrl": "http://127.0.0.1:8787",
         "token": "optional-bearer-token"

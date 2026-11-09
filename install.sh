@@ -113,10 +113,10 @@ seed_json() {
   fi
   chmod 600 "$APP_DIR/data/$dst"
 }
-[[ -f data/allowlist.json ]] || fail "data/allowlist.json is missing"
-[[ -f data/settings.json ]] || fail "data/settings.json is missing"
-seed_json allowlist.json allowlist.json
-seed_json settings.json settings.json
+[[ -f data/allowlist.example.json ]] || fail "data/allowlist.example.json is missing"
+[[ -f data/settings.example.json ]] || fail "data/settings.example.json is missing"
+seed_json allowlist.example.json allowlist.json
+seed_json settings.example.json settings.json
 
 if [[ ! -f "$APP_DIR/.env" ]]; then
   if t="$(env_file_token .env)"; then
