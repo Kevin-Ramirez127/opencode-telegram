@@ -1,29 +1,25 @@
 #!/usr/bin/env bash
 #
-# install.sh — one-shot installer for telegram-pc-remote.
+# install.sh — one-shot installer for opencode-telegram.
 #
 # What it does (idempotent, safe to re-run):
 #   1. Checks for required tools: go (>= 1.23) and jq.
-#   2. Builds the bot binary to bin/telegram-pc-remote.
-#   3. Installs the application to $PREFIX/share/telegram-remote
-#      (default PREFIX ~/.local): binary, control script, .env, data/ and
-#      commands/. User content (.env token, data/*.json, commands/*.sh) is
-#      seeded on first install and never overwritten afterwards.
-#   4. Generates the `telegram-remote` command in $PREFIX/bin (a real file
-#      running the installed copy — no dependency on this checkout).
-#   5. Asks for the Telegram bot token (from @BotFather) and saves it to the
-#      installed .env. Skipped when TELEGRAM_BOT_TOKEN is exported, when the
-#      installed .env already has a token, when stdin is not a TTY, or with
-#      --no-prompt.
-#   6. Makes scripts executable.
+#   2. Builds the daemon to bin/opencode-telegram.
+#   3. Installs the application to $PREFIX/share/opencode-telegram
+#      (default PREFIX ~/.local): binary, control script, .env, data/.
+#      User content (.env token, data/*.json) is seeded on first install and
+#      never overwritten afterwards.
+#   4. Generates the `opencode-telegram` command in $PREFIX/bin.
+#   5. Asks for the Telegram bot token when needed.
+#   6. Optionally installs a systemd user unit with --systemd.
 #
 # Usage:
-#   ./install.sh                          # full install (prompts for token if needed)
-#   ./install.sh --check                  # also run `go vet` + `go test ./...` after building
-#   ./install.sh --no-prompt              # never prompt (for scripts/CI)
+#   ./install.sh                          # full install
+#   ./install.sh --check                  # also run go vet + go test
+#   ./install.sh --systemd                # also install + enable the user unit
+#   ./install.sh --no-prompt              # never prompt
 #   TELEGRAM_BOT_TOKEN=... ./install.sh   # provide the token non-interactively
-#   PREFIX=/opt/tpr ./install.sh          # custom install prefix
-#   INSTALL_DIR=... APP_DIR=... ./install.sh  # override install locations directly
+#   PREFIX=/opt/otg ./install.sh          # custom install prefix
 #
 set -euo pipefail
 
@@ -32,16 +28,18 @@ cd "$ROOT_DIR"
 
 PREFIX="${PREFIX:-$HOME/.local}"
 INSTALL_DIR="${INSTALL_DIR:-$PREFIX/bin}"
-APP_DIR="${APP_DIR:-$PREFIX/share/telegram-remote}"
-INSTALL_NAME="telegram-remote"
+APP_DIR="${APP_DIR:-$PREFIX/share/opencode-telegram}"
+INSTALL_NAME="opencode-telegram"
 
 CHECK=false
 NO_PROMPT=false
+SYSTEMD=false
 fail() { echo "error: $*" >&2; exit 1; }
 info() { echo "==> $*"; }
 for arg in "$@"; do
   case "$arg" in
     --check) CHECK=true ;;
+    --systemd) SYSTEMD=true ;;
     --no-prompt|--non-interactive) NO_PROMPT=true ;;
     -h|--help) sed -n '2,/^$/p' "$0" | sed 's/^# \?//'; exit 0 ;;
     *) fail "unknown option '$arg' (try --help)" ;;
@@ -50,26 +48,21 @@ done
 
 # --- 1. prerequisites ---------------------------------------------------------
 info "checking prerequisites..."
-
 command -v go >/dev/null 2>&1 || fail "go is not installed (see https://go.dev/dl/ — need go >= 1.23)"
-GO_VER="$(go version | grep -oE 'go[0-9]+\.[0-9]+' | tr -d 'go' || echo 0)"
+command -v jq >/dev/null 2>&1 || fail "jq is required (install with: sudo apt install jq | brew install jq | sudo dnf install jq)"
 info "found $(go version)"
 
-command -v jq >/dev/null 2>&1 || fail "jq is required (install with: sudo apt install jq | brew install jq | sudo dnf install jq)"
-
 # --- 2. build -----------------------------------------------------------------
-info "building bin/telegram-pc-remote..."
+VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
+info "building bin/opencode-telegram ($VERSION)..."
 mkdir -p bin
 go mod download
-if ! go build -o bin/telegram-pc-remote .; then
-  fail "build failed"
-fi
-chmod +x bin/telegram-pc-remote
-info "build ok: bin/telegram-pc-remote"
+go build -ldflags "-X main.version=$VERSION" -o bin/opencode-telegram . || fail "build failed"
+chmod +x bin/opencode-telegram
+info "build ok"
 
-# --- 3. repo .env (dev convenience; the installed copy is what runs) ---------
+# --- 3. repo .env -------------------------------------------------------------
 if [[ ! -f .env ]]; then
-  [[ -f .env.example ]] || fail ".env.example is missing"
   cp .env.example .env
   chmod 600 .env
   info "created .env from .env.example (chmod 600)"
@@ -78,8 +71,8 @@ else
   info ".env already exists (kept, chmod 600 enforced)"
 fi
 
-# --- 4. token helpers (operate on any .env file; never echo the token) -----------
-env_file_token() { # $1 = env file; prints the token or returns 1
+# --- 4. token helpers ---------------------------------------------------------
+env_file_token() {
   [[ -f "$1" ]] || return 1
   local v
   v="$(sed -n 's/^[[:space:]]*TELEGRAM_BOT_TOKEN=[[:space:]]*//p' "$1" | head -n 1)"
@@ -87,7 +80,7 @@ env_file_token() { # $1 = env file; prints the token or returns 1
   [[ -n "$v" ]] && printf '%s' "$v"
 }
 
-set_env_file_token() { # $1 = env file, $2 = token; upserts the token (mode 600)
+set_env_file_token() {
   local f="$1" t="$2" t_esc tmp
   t_esc="$(printf '%s' "$t" | sed 's/[&\\/]/\\&/g')"
   tmp="$(mktemp "$(dirname "$f")/.env.XXXXXX")"
@@ -104,67 +97,30 @@ set_env_file_token() { # $1 = env file, $2 = token; upserts the token (mode 600)
   trap - EXIT
 }
 
-# --- 5. install application to $APP_DIR ----------------------------------------
-# Program files are always refreshed; user content (.env, data, commands) is
-# only seeded when missing, so reinstalls never wipe configuration.
+# --- 5. install application ---------------------------------------------------
 info "installing application to $APP_DIR..."
-mkdir -p "$APP_DIR/bin" "$APP_DIR/scripts" "$APP_DIR/data" "$APP_DIR/commands"
-install -m755 bin/telegram-pc-remote "$APP_DIR/bin/telegram-pc-remote"
-install -m755 scripts/bot.sh "$APP_DIR/scripts/bot.sh"
+mkdir -p "$APP_DIR/bin" "$APP_DIR/scripts" "$APP_DIR/data" "$APP_DIR/packaging"
+install -m755 bin/opencode-telegram "$APP_DIR/bin/opencode-telegram"
+install -m755 scripts/daemon.sh "$APP_DIR/scripts/daemon.sh"
+install -m644 packaging/opencode-telegram.service "$APP_DIR/packaging/opencode-telegram.service" 2>/dev/null || true
 info "installed binary + control script"
 
-shopt -s nullglob
-for src in commands/*.sh; do
-  base="$(basename "$src")"
-  if [[ ! -f "$APP_DIR/commands/$base" ]]; then
-    cp -p "$src" "$APP_DIR/commands/$base"
-    info "installed commands/$base (new file)"
+seed_json() {
+  local src="$1" dst="$2"
+  if [[ ! -f "$APP_DIR/data/$dst" ]]; then
+    cp -p "data/$src" "$APP_DIR/data/$dst"
+    info "installed data/$dst (new file)"
   fi
-done
-shopt -u nullglob
-
-seed_json() { # $1 = filename; copies repo data file only when missing
-  if [[ ! -f "$APP_DIR/data/$1" ]]; then
-    cp -p "data/$1" "$APP_DIR/data/$1"
-    info "installed data/$1 (new file)"
-  fi
-  chmod 600 "$APP_DIR/data/$1"
+  chmod 600 "$APP_DIR/data/$dst"
 }
+[[ -f data/allowlist.json ]] || fail "data/allowlist.json is missing"
+[[ -f data/settings.json ]] || fail "data/settings.json is missing"
+seed_json allowlist.json allowlist.json
+seed_json settings.json settings.json
 
-mkdir -p data commands
-if [[ ! -f data/commands.json ]]; then
-  printf '{\n  "version": 2,\n  "commands": []\n}\n' > data/commands.json
-  chmod 600 data/commands.json
-  info "created empty repo data/commands.json (chmod 600)"
-else
-  chmod 600 data/commands.json
-  jq -e '.version == 2 and (.commands | type == "array")' data/commands.json >/dev/null \
-    || fail "repo data/commands.json is not valid (expected {version: 2, commands: []})"
-  info "repo data/commands.json valid (kept)"
-fi
-seed_json commands.json
-
-if [[ ! -f data/whitelist.json ]]; then
-  cat > data/whitelist.json <<'EOF'
-{
-  "note": "Allowlist. Get your numeric user/chat IDs from a bot such as @userinfobot. BOTH lists are enforced: a message is processed only if its sender is in 'users' AND the chat is in 'chats'.",
-  "users": [],
-  "chats": []
-}
-EOF
-  chmod 600 data/whitelist.json
-  info "created repo data/whitelist.json skeleton (chmod 600)"
-else
-  chmod 600 data/whitelist.json
-  info "repo data/whitelist.json kept (chmod 600 enforced)"
-fi
-seed_json whitelist.json
-
-# Seed the installed .env: prefer the repo .env token, else the example file.
-# An existing installed .env is never touched here.
 if [[ ! -f "$APP_DIR/.env" ]]; then
   if t="$(env_file_token .env)"; then
-    printf '# Installed by telegram-pc-remote/install.sh. Never commit this file.\nTELEGRAM_BOT_TOKEN=%s\n' "$t" > "$APP_DIR/.env"
+    printf '# Installed by opencode-telegram/install.sh. Never commit this file.\nTELEGRAM_BOT_TOKEN=%s\n' "$t" > "$APP_DIR/.env"
     info "installed .env (token taken from repo .env)"
   else
     cp .env.example "$APP_DIR/.env"
@@ -174,8 +130,7 @@ if [[ ! -f "$APP_DIR/.env" ]]; then
   unset t
 fi
 
-# --- 6. bot token (installed .env) ----------------------------------------------
-# Sources, in order: exported env var, installed .env value, interactive prompt.
+# --- 6. token ----------------------------------------------------------------
 if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]]; then
   set_env_file_token "$APP_DIR/.env" "$TELEGRAM_BOT_TOKEN"
   info "bot token taken from environment and saved to installed .env (chmod 600)"
@@ -184,7 +139,7 @@ elif env_file_token "$APP_DIR/.env" >/dev/null; then
 elif [[ "$NO_PROMPT" == "true" ]]; then
   info "no token configured — set TELEGRAM_BOT_TOKEN in $APP_DIR/.env later (--no-prompt given)"
 elif [[ ! -t 0 ]]; then
-  info "no token configured — no TTY for prompting; set TELEGRAM_BOT_TOKEN in $APP_DIR/.env later"
+  info "no token configured — set TELEGRAM_BOT_TOKEN in $APP_DIR/.env later"
 else
   printf 'Enter your Telegram bot token from @BotFather (empty to skip): ' >&2
   token=""
@@ -194,34 +149,44 @@ else
   if [[ -z "$token" ]]; then
     info "skipped — set TELEGRAM_BOT_TOKEN in $APP_DIR/.env later"
   else
-    [[ "$token" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]] || echo "warning: that does not look like a Telegram token (expected digits, a colon, then the secret)" >&2
+    [[ "$token" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]] || echo "warning: that does not look like a Telegram token" >&2
     set_env_file_token "$APP_DIR/.env" "$token"
     info "bot token saved to installed .env (chmod 600)"
   fi
   unset token
 fi
 
-# --- 7. scripts ----------------------------------------------------------------
-chmod +x scripts/*.sh install.sh 2>/dev/null || true
-info "scripts are executable"
-
-# --- 8. install `telegram-remote` command (real file, runs installed copy) ------
+# --- 7. wrapper ---------------------------------------------------------------
 info "installing $INSTALL_NAME into $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
-rm -f "$INSTALL_DIR/$INSTALL_NAME"  # drop the legacy symlink, if present
+rm -f "$INSTALL_DIR/$INSTALL_NAME"
 cat > "$INSTALL_DIR/$INSTALL_NAME" <<EOF
 #!/usr/bin/env bash
-# Generated by telegram-pc-remote/install.sh — do not edit (reinstall to update).
-exec "$APP_DIR/scripts/bot.sh" "\$@"
+# Generated by opencode-telegram/install.sh — do not edit (reinstall to update).
+exec "$APP_DIR/scripts/daemon.sh" "\$@"
 EOF
 chmod +x "$INSTALL_DIR/$INSTALL_NAME"
 info "installed $INSTALL_DIR/$INSTALL_NAME (runs $APP_DIR)"
 case ":${PATH:-}:" in
   *":$INSTALL_DIR:"*) ;;
-  *) echo "note: $INSTALL_DIR is not on your PATH — add 'export PATH=\"\$HOME/.local/bin:\$PATH\"' to ~/.bashrc (then restart the shell)" >&2 ;;
+  *) echo "note: $INSTALL_DIR is not on your PATH — add 'export PATH=\"\$HOME/.local/bin:\$PATH\"' to your shell rc" >&2 ;;
 esac
 
-# --- 9. optional verification ---------------------------------------------------
+# --- 8. systemd user unit (optional) ------------------------------------------
+if $SYSTEMD; then
+  UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+  mkdir -p "$UNIT_DIR"
+  sed "s|%h/.local/share/opencode-telegram|$APP_DIR|g" \
+    packaging/opencode-telegram.service > "$UNIT_DIR/opencode-telegram.service"
+  info "installed $UNIT_DIR/opencode-telegram.service"
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user daemon-reload || true
+    systemctl --user enable --now opencode-telegram.service || \
+      echo "note: could not enable the unit automatically; run: systemctl --user enable --now opencode-telegram" >&2
+  fi
+fi
+
+# --- 9. optional verification -------------------------------------------------
 if $CHECK; then
   info "running go vet..."
   go vet ./...
@@ -230,34 +195,29 @@ if $CHECK; then
   info "checks passed"
 fi
 
-# --- next steps -----------------------------------------------------------------
+# --- next steps ---------------------------------------------------------------
 cat <<'EOF'
 
 install done. Next steps:
 
   Installed layout (self-contained, repo not needed at runtime):
-    ~/.local/bin/telegram-remote              # the command
-    ~/.local/share/telegram-remote/           # app root: bin/, scripts/, .env,
-                                              # data/, commands/, bot.log, .run/
+    ~/.local/bin/opencode-telegram              # the command
+    ~/.local/share/opencode-telegram/           # app root: bin/, scripts/, .env,
+                                                #   data/allowlist.json, data/settings.json
+    ~/.local/share/opencode-telegram/opencode-telegram.log
 
-  1. Bot token: configured above (or edit ~/.local/share/telegram-remote/.env).
+  1. Allowlist yourself (numeric IDs from @userinfobot):
+       opencode-telegram config --adduser <your-user-id>
 
-  2. Whitelist yourself (numeric IDs — get them from @userinfobot):
-       telegram-remote config --adduser <your-id>
-       telegram-remote config --list
+  2. Start the daemon:
+       opencode-telegram start
+       opencode-telegram logs -f
 
-  3. Register a button (example):
-       COMMANDS_FILE=~/.local/share/telegram-remote/data/commands.json \
-       COMMANDS_DIR=~/.local/share/telegram-remote/commands \
-         scripts/manage_commands.sh add "Hello" --script hello.sh
+  3. In OpenCode, load the companion plugin and run /telegram to enable
+     notifications. Notifications are OFF by default.
 
-  4. Start / stop the bot (works from any directory):
-       telegram-remote start
-       telegram-remote status
-       telegram-remote logs
-       telegram-remote stop
-       # or via make (repo checkout): make start | make stop | make status
-
-  To remove the command later: make uninstall  (keeps .env, data/, commands/)
+  4. If you want the daemon to survive logout, prefer systemd:
+       ./install.sh --systemd
+     or copy packaging/opencode-telegram.service manually.
 
 EOF

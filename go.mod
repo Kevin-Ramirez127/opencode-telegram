@@ -1,4 +1,4 @@
-module telegram-pc-remote
+module opencode-telegram
 
 go 1.27
 

@@ -1,0 +1,5 @@
+{
+  "note": "Allowlist. Both the sending user AND the chat must be listed. Get numeric IDs from @userinfobot. Edit this file and reload with SIGHUP or restart the daemon.",
+  "users": [],
+  "chats": []
+}

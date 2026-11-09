@@ -9,6 +9,6 @@
 *.log
 /.run/
 
-# Backups made by manage_commands.sh
-data/*
-commands/
+# Backups / temporary files created by scripts
+data/*.bak
+data/.tmp-*
