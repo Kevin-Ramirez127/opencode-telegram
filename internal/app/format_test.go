@@ -1,8 +1,10 @@
 package app
 
 import (
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"opencode-telegram/internal/occlient"
 )
@@ -103,5 +105,30 @@ func TestTruncateText(t *testing.T) {
 	got := truncateText(long, 50)
 	if len(got) > 50 {
 		t.Fatalf("truncated length = %d", len(got))
+	}
+}
+
+func TestTruncateTextIsUTF8Safe(t *testing.T) {
+	// 200 bytes of a 2-byte rune. A naive byte cut at 50 lands inside a rune.
+	long := strings.Repeat("é", 100)
+	got := truncateText(long, 50)
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncateText produced invalid UTF-8: %q", got)
+	}
+	if len(got) > 50 {
+		t.Fatalf("truncated length = %d, want <= 50", len(got))
+	}
+
+	oneLine := truncateOneLine(long, 21)
+	if !utf8.ValidString(oneLine) || len(oneLine) > 21 {
+		t.Fatalf("truncateOneLine = %q (%d bytes)", oneLine, len(oneLine))
+	}
+}
+
+func TestSanitizeInvalidUTF8(t *testing.T) {
+	bad := "hello \xff world"
+	got := sanitizeUTF8(bad)
+	if !utf8.ValidString(got) {
+		t.Fatalf("sanitizeUTF8 = %q", got)
 	}
 }

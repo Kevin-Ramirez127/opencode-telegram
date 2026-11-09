@@ -6,6 +6,7 @@ import (
 	"log"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
@@ -518,25 +519,53 @@ func onOff(v bool) string {
 }
 
 func truncateText(s string, limit int) string {
+	s = sanitizeUTF8(s)
 	if len(s) <= limit {
 		return s
 	}
-	if limit <= 20 {
-		return s[:limit]
+	const suffix = "\n…[truncated]"
+	if limit <= len(suffix) {
+		return truncateUTF8Bytes(s, limit)
 	}
-	return s[:limit-20] + "\n…[truncated]"
+	return truncateUTF8Bytes(s, limit-len(suffix)) + suffix
 }
 
 func truncateOneLine(s string, limit int) string {
-	s = strings.ReplaceAll(s, "\n", " ")
+	s = sanitizeUTF8(strings.ReplaceAll(s, "\n", " "))
 	s = strings.TrimSpace(s)
 	if len(s) <= limit {
 		return s
 	}
-	if limit <= 1 {
-		return s[:limit]
+	const suffix = "…"
+	if limit <= len(suffix) {
+		return truncateUTF8Bytes(s, limit)
 	}
-	return s[:limit-1] + "…"
+	return truncateUTF8Bytes(s, limit-len(suffix)) + suffix
+}
+
+// sanitizeUTF8 protects Telegram from invalid bytes (for example, a provider
+// returning a broken string). Telegram rejects the whole message otherwise.
+func sanitizeUTF8(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+	return strings.ToValidUTF8(s, "\uFFFD")
+}
+
+// truncateUTF8Bytes cuts s to at most max bytes without splitting a UTF-8
+// rune. Byte slicing in the middle of a multi-byte character is what caused
+// Telegram's "strings must be encoded in UTF-8" errors.
+func truncateUTF8Bytes(s string, max int) string {
+	if max >= len(s) {
+		return s
+	}
+	if max <= 0 {
+		return ""
+	}
+	for max > 0 && !utf8.RuneStart(s[max]) {
+		max--
+	}
+	return s[:max]
 }
 
 // sendToChat is used by HTTP handlers.

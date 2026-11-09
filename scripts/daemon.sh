@@ -45,7 +45,21 @@ fail() { echo "error: $*" >&2; exit 1; }
 
 pid_alive() { [[ -n "${1:-}" ]] && kill -0 "$1" 2>/dev/null; }
 
+# running_pids prints every live daemon process for this install. pgrep is
+# used instead of trusting the PID file, so duplicate or stale starts are
+# detected and cleaned up.
+running_pids() {
+  pgrep -x -f "$BIN" 2>/dev/null || true
+}
+
 current_pid() {
+  local pids
+  pids="$(running_pids)"
+  if [[ -n "$pids" ]]; then
+    printf '%s' "$(printf '%s\n' "$pids" | head -n1)"
+    return 0
+  fi
+  # Fall back to the PID file for compatibility with older start scripts.
   [[ -f "$PIDFILE" ]] || return 1
   local pid
   pid="$(tr -d '[:space:]' < "$PIDFILE" 2>/dev/null || true)"
@@ -73,8 +87,11 @@ cmd_start() {
   local foreground=false
   [[ "${1:-}" == "--foreground" ]] && foreground=true
 
-  if pid=$(current_pid); then
-    echo "already running (pid $pid)"
+  local pids
+  pids="$(running_pids)"
+  if [[ -n "$pids" ]]; then
+    echo "$(printf '%s\n' "$pids" | head -n1)" > "$PIDFILE"
+    echo "already running (pid $(printf '%s' "$pids" | tr '\n' ' '))"
     return 0
   fi
   [[ -f "$PIDFILE" ]] && rm -f "$PIDFILE"
@@ -89,11 +106,14 @@ cmd_start() {
 
   mkdir -p "$(dirname "$PIDFILE")" "$(dirname "$LOGFILE")"
   touch "$LOGFILE"
-  cd "$ROOT" && nohup "$BIN" >>"$LOGFILE" 2>&1 &
+  cd "$ROOT"
+  nohup "$BIN" >>"$LOGFILE" 2>&1 &
   echo "$!" > "$PIDFILE"
   sleep 1
-  if pid=$(current_pid); then
-    echo "started (pid $pid, log: $LOGFILE)"
+  pids="$(running_pids)"
+  if [[ -n "$pids" ]]; then
+    echo "$(printf '%s\n' "$pids" | head -n1)" > "$PIDFILE"
+    echo "started (pid $(printf '%s' "$pids" | tr '\n' ' '), log: $LOGFILE)"
   else
     rm -f "$PIDFILE"
     fail "failed to start — check $LOGFILE"
@@ -101,33 +121,45 @@ cmd_start() {
 }
 
 cmd_stop() {
-  local pid
-  if ! pid=$(current_pid); then
+  local pids pid p alive
+  pids="$(running_pids)"
+  if [[ -z "$pids" ]] && pid=$(current_pid); then
+    pids="$pid"
+  fi
+  if [[ -z "$pids" ]]; then
     [[ -f "$PIDFILE" ]] && rm -f "$PIDFILE"
     echo "not running"
     return 0
   fi
-  echo -n "stopping (pid $pid)..."
-  kill "$pid" 2>/dev/null || true
+  echo -n "stopping (pid $(printf '%s' "$pids" | tr '\n' ' '))..."
+  for p in $pids; do kill "$p" 2>/dev/null || true; done
   for _ in $(seq 1 50); do
-    pid_alive "$pid" || break
+    alive=false
+    for p in $pids; do
+      if pid_alive "$p"; then alive=true; break; fi
+    done
+    $alive || break
     sleep 0.2
     echo -n "."
   done
-  if pid_alive "$pid"; then
-    echo -n " (forcing)"
-    kill -9 "$pid" 2>/dev/null || true
-    sleep 0.5
-  fi
+  for p in $pids; do
+    if pid_alive "$p"; then
+      echo -n " (forcing)"
+      kill -9 "$p" 2>/dev/null || true
+    fi
+  done
+  sleep 0.5
   rm -f "$PIDFILE"
-  pid_alive "$pid" && fail "could not stop pid $pid"
+  for p in $pids; do pid_alive "$p" && fail "could not stop pid $p"; done
   echo " stopped"
 }
 
 cmd_status() {
-  local pid
-  if pid=$(current_pid); then
-    echo "running (pid $pid, log: $LOGFILE)"
+  local pids
+  pids="$(running_pids)"
+  if [[ -n "$pids" ]]; then
+    echo "$(printf '%s\n' "$pids" | head -n1)" > "$PIDFILE"
+    echo "running (pid $(printf '%s' "$pids" | tr '\n' ' '), log: $LOGFILE)"
   else
     echo "not running"
     return 1
@@ -144,10 +176,11 @@ cmd_logs() {
 }
 
 cmd_reload() {
-  local pid
-  pid=$(current_pid) || fail "not running — nothing to reload"
-  kill -HUP "$pid"
-  echo "reloaded (SIGHUP sent to pid $pid)"
+  local pids p
+  pids="$(running_pids)"
+  [[ -n "$pids" ]] || fail "not running — nothing to reload"
+  for p in $pids; do kill -HUP "$p" 2>/dev/null || true; done
+  echo "reloaded (SIGHUP sent to pid $(printf '%s' "$pids" | tr '\n' ' '))"
 }
 
 # --- allowlist ---------------------------------------------------------------

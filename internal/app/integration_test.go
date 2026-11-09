@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
@@ -202,6 +203,25 @@ func TestSessionDoneNotification(t *testing.T) {
 	}
 	if st := a.sessionSnapshot("ses_1"); st.Busy || st.Outcome != "succeeded" {
 		t.Fatalf("state = %+v", st)
+	}
+}
+
+func TestSessionDoneNotificationUTF8(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	foc.lastAssistant = strings.Repeat("é", 2000) // 4000 bytes, 2 bytes per rune
+	a.handleEvent(occlient.Event{
+		Type: "session.execution.succeeded",
+		Data: []byte(`{"sessionID":"ses_1"}`),
+	})
+	text := ftg.lastText()
+	if !utf8.ValidString(text) {
+		t.Fatalf("notification is not valid UTF-8: %q", text)
+	}
+	if !strings.Contains(text, "session finished") {
+		t.Fatalf("notification missing heading:\n%s", text)
+	}
+	if len(text) > maxTelegramText {
+		t.Fatalf("notification length = %d, want <= %d", len(text), maxTelegramText)
 	}
 }
 
