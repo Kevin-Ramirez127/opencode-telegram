@@ -18,7 +18,6 @@ StandardError=journal
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=read-only
 ReadWritePaths=%h/.local/share/opencode-telegram
 
 [Install]

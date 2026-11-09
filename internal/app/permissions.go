@@ -75,6 +75,7 @@ func (a *App) replyPermission(chatID int64, token string, act action) {
 		return
 	}
 	a.delAction(token)
+	a.delPermissionActions(act.RequestID)
 
 	label := "Rejected"
 	switch act.Decision {
@@ -96,14 +97,20 @@ func (a *App) handlePermissionReplied(requestID string) {
 	a.mu.Lock()
 	msgs := a.permMsgs[requestID]
 	delete(a.permMsgs, requestID)
+	a.mu.Unlock()
+	a.delPermissionActions(requestID)
+	for _, m := range msgs {
+		a.editMarkup(m.ChatID, m.MessageID, "🔐 Permission request resolved in OpenCode.", nil)
+	}
+}
+
+func (a *App) delPermissionActions(requestID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	for token, act := range a.actions {
 		if act.Kind == "perm" && act.RequestID == requestID {
 			delete(a.actions, token)
 		}
-	}
-	a.mu.Unlock()
-	for _, m := range msgs {
-		a.editMarkup(m.ChatID, m.MessageID, "🔐 Permission request resolved in OpenCode.", nil)
 	}
 }
 
