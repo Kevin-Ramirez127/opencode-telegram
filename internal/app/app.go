@@ -42,7 +42,8 @@ type App struct {
 	sem              chan struct{}
 	updates          chan occlient.Event
 	syncMu           sync.Mutex
-	explicitEndpoint bool
+	explicitURL      bool
+	explicitPassword bool
 
 	mu           sync.Mutex
 	formMu       sync.Mutex
@@ -76,7 +77,8 @@ func New(cfg *config.Config, bot *tgbotapi.BotAPI, oc *occlient.Client, wl *whit
 		started:          time.Now(),
 		sem:              make(chan struct{}, 8),
 		updates:          make(chan occlient.Event, 4096),
-		explicitEndpoint: cfg.OpenCodeURL != "",
+		explicitURL:      cfg.OpenCodeURLExplicit,
+		explicitPassword: cfg.OpenCodePasswordExplicit,
 		sessions:         make(map[string]*sessionState),
 		bindings:         make(map[int64]string),
 		actions:          make(map[string]*action),

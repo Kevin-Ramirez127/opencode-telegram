@@ -61,10 +61,17 @@ func nextBackoff(d time.Duration) time.Duration {
 // with /api/info. It returns false when OpenCode is not reachable yet.
 func (a *App) ensureEndpoint(ctx context.Context) bool {
 	base, password := a.oc.Endpoint()
-	if base == "" || !a.explicitEndpoint {
+	if !a.explicitURL || !a.explicitPassword {
 		if svc, ok := occlient.DiscoverService(); ok {
-			if svc.URL != "" && (svc.URL != base || svc.Password != password) {
-				a.oc.SetEndpoint(svc.URL, svc.Password)
+			nextBase, nextPassword := base, password
+			if !a.explicitURL && svc.URL != "" {
+				nextBase = svc.URL
+			}
+			if !a.explicitPassword && svc.Password != "" {
+				nextPassword = svc.Password
+			}
+			if nextBase != base || nextPassword != password {
+				a.oc.SetEndpoint(nextBase, nextPassword)
 				base, password = a.oc.Endpoint()
 				log.Printf("discovered OpenCode service at %s (version %s)", base, svc.Version)
 			}

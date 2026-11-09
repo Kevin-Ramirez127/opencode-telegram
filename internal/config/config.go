@@ -24,6 +24,11 @@ type Config struct {
 	// service registration at startup and when reconnecting.
 	OpenCodeURL      string
 	OpenCodePassword string
+	// OpenCodeURLExplicit / OpenCodePasswordExplicit record whether those
+	// values came from the environment (and must not be replaced by service
+	// discovery).
+	OpenCodeURLExplicit      bool
+	OpenCodePasswordExplicit bool
 
 	// ListenAddr is the loopback address of the local settings API used by
 	// the OpenCode plugin.
@@ -78,16 +83,18 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		Token:            token,
-		OpenCodeURL:      strings.TrimRight(strings.TrimSpace(os.Getenv("OPENCODE_URL")), "/"),
-		OpenCodePassword: strings.TrimSpace(os.Getenv("OPENCODE_PASSWORD")),
-		ListenAddr:       listen,
-		PluginToken:      strings.TrimSpace(os.Getenv("PLUGIN_TOKEN")),
-		DataDir:          abs,
-		AllowlistFile:    filepath.Join(abs, "allowlist.json"),
-		SettingsFile:     filepath.Join(abs, "settings.json"),
-		ReloadEvery:      reloadEvery,
-		HTTPTimeout:      httpTimeout,
+		Token:                    token,
+		OpenCodeURL:              strings.TrimRight(strings.TrimSpace(os.Getenv("OPENCODE_URL")), "/"),
+		OpenCodePassword:         strings.TrimSpace(os.Getenv("OPENCODE_PASSWORD")),
+		OpenCodeURLExplicit:      strings.TrimSpace(os.Getenv("OPENCODE_URL")) != "",
+		OpenCodePasswordExplicit: strings.TrimSpace(os.Getenv("OPENCODE_PASSWORD")) != "",
+		ListenAddr:               listen,
+		PluginToken:              strings.TrimSpace(os.Getenv("PLUGIN_TOKEN")),
+		DataDir:                  abs,
+		AllowlistFile:            filepath.Join(abs, "allowlist.json"),
+		SettingsFile:             filepath.Join(abs, "settings.json"),
+		ReloadEvery:              reloadEvery,
+		HTTPTimeout:              httpTimeout,
 	}, nil
 }
 
