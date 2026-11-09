@@ -213,6 +213,9 @@ func (a *App) fieldMarkup(flow *formFlow, field occlient.FormField) (tgbotapi.In
 			rows = append(rows, row)
 		}
 		add("Done", action{Kind: "form_done"})
+		if allowCustom && field.Custom {
+			add("✍️ Type your own response", action{Kind: "form_custom"})
+		}
 		answerable = len(field.Options) > 0
 
 	case "string":
