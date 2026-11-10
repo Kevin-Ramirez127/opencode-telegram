@@ -22,6 +22,20 @@ adds a `/telegram` slash command and a palette command,
 
 Every change is applied immediately through the daemon's loopback API.
 
+## Footer icon
+
+The plugin also adds a **✈ Telegram** item to the TUI footer status row (under
+the prompt, also visible on the home screen). It shows the master notification
+state at a glance:
+
+- **on** — notifications are enabled (green);
+- **off** — notifications are disabled (muted);
+- **?** — the daemon is unreachable (warning color).
+
+Click or tap the icon to toggle notifications without opening the full
+settings picker. The icon refreshes every few seconds, so changes made with
+`/telegram` are reflected immediately.
+
 ## Security switches
 
 OpenCode Telegram deliberately separates *notifications* from *actions*:

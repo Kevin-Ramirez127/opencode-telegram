@@ -1,7 +1,10 @@
 import { Plugin } from "@opencode/plugin/tui"
 import type { Context } from "@opencode/plugin/tui/context"
+import { createSignal } from "solid-js"
 
 const DEFAULT_DAEMON = "http://127.0.0.1:8787"
+const TELEGRAM_ICON = "✈"
+const STATUS_POLL_MS = 10_000
 
 type LongMessageMode = "split" | "summary"
 
@@ -143,6 +146,108 @@ async function toastError(context: Context, error: unknown) {
     variant: "error",
     duration: 6000,
   })
+}
+
+function createNotificationStatus(context: Context) {
+  const [enabled, setEnabled] = createSignal<boolean>()
+  const [busy, setBusy] = createSignal(false)
+  const [error, setError] = createSignal<string>()
+  const [hovered, setHovered] = createSignal(false)
+  let disposed = false
+  let refreshing = false
+  let pending = false
+  let version = 0
+
+  const refresh = async () => {
+    if (disposed) return
+    if (refreshing) {
+      pending = true
+      return
+    }
+    refreshing = true
+    const stamp = version
+    try {
+      const data = await load(context)
+      if (disposed || stamp !== version) return
+      setEnabled(data.settings.notifications.enabled)
+      setError(undefined)
+    } catch (cause) {
+      if (disposed) return
+      setError(errText(cause))
+    } finally {
+      refreshing = false
+      if (pending && !disposed) {
+        pending = false
+        void refresh()
+      }
+    }
+  }
+
+  const toggle = async () => {
+    if (busy()) return
+    setBusy(true)
+    try {
+      const current = enabled() ?? (await load(context)).settings.notifications.enabled
+      const next = !current
+      await patchNotifications(context, { enabled: next })
+      version += 1
+      setEnabled(next)
+      setError(undefined)
+      context.ui.toast.show({
+        title: "OpenCode Telegram",
+        message: next ? "Notifications enabled." : "Notifications disabled.",
+        variant: next ? "success" : "info",
+        duration: 2500,
+      })
+    } catch (cause) {
+      setError(errText(cause))
+      await toastError(context, cause)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const timer = setInterval(() => void refresh(), STATUS_POLL_MS)
+  void refresh()
+
+  const stop = () => {
+    disposed = true
+    clearInterval(timer)
+  }
+
+  return { enabled, busy, error, hovered, setHovered, toggle, refresh, stop }
+}
+
+type NotificationStatus = ReturnType<typeof createNotificationStatus>
+
+function TelegramStatus(props: { context: Context; status: NotificationStatus }) {
+  const { context, status } = props
+
+  const color = () => {
+    if (status.error()) return context.theme.text.feedback.warning.base
+    if (status.enabled() === true) return context.theme.text.feedback.success.base
+    return context.theme.text.muted
+  }
+
+  const label = () => {
+    if (status.busy()) return "…"
+    if (status.enabled() === true) return "on"
+    if (status.enabled() === false) return "off"
+    return "?"
+  }
+
+  return (
+    <text
+      fg={color()}
+      bg={status.hovered() ? context.theme.background.raised.base : undefined}
+      selectable={false}
+      onMouseOver={() => status.setHovered(true)}
+      onMouseOut={() => status.setHovered(false)}
+      onMouseUp={() => void status.toggle()}
+    >
+      {`${TELEGRAM_ICON} Telegram ${label()}`}
+    </text>
+  )
 }
 
 async function toggleSecurity(
@@ -319,7 +424,7 @@ async function handleChoice(context: Context, value: string): Promise<boolean> {
   }
 }
 
-async function openSettings(context: Context) {
+async function openSettings(context: Context, onChange?: () => void) {
   for (;;) {
     let data: SettingsResponse
     try {
@@ -344,6 +449,7 @@ async function openSettings(context: Context) {
 
     try {
       const again = await handleChoice(context, choice)
+      onChange?.()
       if (!again) return
     } catch (error) {
       await toastError(context, error)
@@ -354,6 +460,14 @@ async function openSettings(context: Context) {
 export default Plugin.define({
   id: "opencode-telegram",
   setup(context) {
+    const status = createNotificationStatus(context)
+    const release = [
+      context.ui.slot({
+        append: "prompt.footer.status",
+        render: () => <TelegramStatus context={context} status={status} />,
+      }),
+    ]
+
     context.keymap.layer(() => ({
       mode: "global",
       priority: 10,
@@ -365,9 +479,14 @@ export default Plugin.define({
           palette: true,
           slash: { name: "telegram", aliases: ["tg"] },
           suggested: true,
-          run: () => openSettings(context),
+          run: () => openSettings(context, () => void status.refresh()),
         },
       ],
     }))
+
+    return () => {
+      status.stop()
+      for (const off of release) off()
+    }
   },
 })
