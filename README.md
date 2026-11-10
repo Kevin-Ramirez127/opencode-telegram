@@ -266,6 +266,17 @@ Change them from the plugin (which asks for confirmation) or by editing
 | `/settings` | Show current notification/security settings |
 | `/test` | Send a test notification to the allowed chats |
 | `/id` | Show your Telegram user/chat ids |
+| `/exit` | Stop the daemon, after an inline **Stop daemon** confirmation |
+| `/poweroff` | Power off the computer, after an inline **Power off** confirmation |
+
+`/exit` only stops the `opencode-telegram` process; OpenCode keeps running.
+`/poweroff` asks the operating system to shut down the machine. Both commands
+are available only to allowlisted users/chats, and neither runs until the
+confirmation button is pressed. Cancel buttons dismiss the request.
+
+The daemon also adds its commands to the bot menu if they are missing. Existing
+bot commands are preserved, so commands registered with BotFather are not
+overwritten.
 
 After `/sessions` + bind, free text is sent to that session **only when**
 `allow_new_messages` is on. Otherwise the bot replies with a reminder.

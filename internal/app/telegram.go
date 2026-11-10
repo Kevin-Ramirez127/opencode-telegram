@@ -100,7 +100,7 @@ func (a *App) handleUpdate(upd tgbotapi.Update) {
 	}
 
 	if isCallback {
-		a.handleCallback(chatID, text)
+		a.handleCallbackFrom(chatID, upd.CallbackQuery.Message.MessageID, text)
 		return
 	}
 	if strings.HasPrefix(text, "/") {
@@ -145,6 +145,10 @@ func (a *App) handleCommand(chatID, userID int64, text string) {
 		a.sendTestNotification([]int64{chatID})
 	case "/settings":
 		a.showSettings(chatID)
+	case "/exit":
+		a.commandExit(chatID)
+	case "/poweroff":
+		a.commandPowerOff(chatID)
 	default:
 		a.send(chatID, fmt.Sprintf("Unknown command %q. Send /help for the command list.", cmd))
 	}
@@ -166,6 +170,8 @@ func (a *App) helpText() string {
 		"/settings — show notification settings",
 		"/test — send a test notification",
 		"/id — show your Telegram ids",
+		"/exit — stop the opencode-telegram daemon (asks first)",
+		"/poweroff — power off this computer (asks first)",
 		"",
 		"After binding, type a message to send it to that session (only when",
 		"'Allow new messages' is enabled in the OpenCode plugin).",
@@ -388,6 +394,10 @@ func (a *App) handleFreeText(chatID int64, text string) {
 // ---------------------------------------------------------------------------
 
 func (a *App) handleCallback(chatID int64, data string) {
+	a.handleCallbackFrom(chatID, 0, data)
+}
+
+func (a *App) handleCallbackFrom(chatID int64, messageID int, data string) {
 	token, ok := parseCallbackData(data)
 	if !ok {
 		a.send(chatID, "⚠️ This button is outdated.")
@@ -398,12 +408,19 @@ func (a *App) handleCallback(chatID int64, data string) {
 		a.send(chatID, "⚠️ This button has expired.")
 		return
 	}
+	if act.ChatID != 0 && act.ChatID != chatID {
+		switch act.Kind {
+		case "daemon_exit", "poweroff", "confirm_cancel":
+			a.send(chatID, "⚠️ This button belongs to another chat.")
+			return
+		}
+	}
 
 	// Summary/thinking buttons are single-use per chat so repeated taps cannot
 	// start multiple expensive generations, while other notify chats can still
 	// use their own copy of the same broadcast button.
 	switch act.Kind {
-	case "show_thinking", "summarize_thinking", "summarize_output":
+	case "show_thinking", "summarize_thinking", "summarize_output", "daemon_exit", "poweroff":
 		if !a.claimAction(token, chatID) {
 			a.send(chatID, "⚠️ This action was already used.")
 			return
@@ -442,6 +459,12 @@ func (a *App) handleCallback(chatID int64, data string) {
 		a.send(chatID, "Cancelled.")
 	case "form_submit":
 		a.formRetrySubmit(chatID, act)
+	case "daemon_exit":
+		a.confirmDaemonExit(chatID, messageID)
+	case "poweroff":
+		a.confirmPowerOff(chatID, messageID)
+	case "confirm_cancel":
+		a.cancelConfirmation(chatID, messageID)
 	default:
 		a.send(chatID, "⚠️ Unknown action.")
 	}

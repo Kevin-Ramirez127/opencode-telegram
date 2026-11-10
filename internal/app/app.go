@@ -41,6 +41,9 @@ type App struct {
 	started          time.Time
 	sem              chan struct{}
 	updates          chan occlient.Event
+	quit             chan struct{}
+	quitOnce         sync.Once
+	poweroff         func(context.Context) error
 	syncMu           sync.Mutex
 	explicitURL      bool
 	explicitPassword bool
@@ -77,6 +80,8 @@ func New(cfg *config.Config, bot *tgbotapi.BotAPI, oc *occlient.Client, wl *whit
 		started:          time.Now(),
 		sem:              make(chan struct{}, 8),
 		updates:          make(chan occlient.Event, 4096),
+		quit:             make(chan struct{}),
+		poweroff:         systemPowerOff,
 		explicitURL:      cfg.OpenCodeURLExplicit,
 		explicitPassword: cfg.OpenCodePasswordExplicit,
 		sessions:         make(map[string]*sessionState),
@@ -91,6 +96,9 @@ func New(cfg *config.Config, bot *tgbotapi.BotAPI, oc *occlient.Client, wl *whit
 
 // Start launches the daemon goroutines. ctx cancellation stops them.
 func (a *App) Start(ctx context.Context, hup <-chan os.Signal) {
+	if a.bot != nil {
+		go a.ensureBotCommands()
+	}
 	go a.eventLoop(ctx)
 	go a.telegramLoop(ctx)
 	go a.pruneLoop(ctx)

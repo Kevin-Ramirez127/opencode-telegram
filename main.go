@@ -111,7 +111,11 @@ func main() {
 		onOff(current.Security.AllowCustomFormAnswers), onOff(current.Security.AllowNewMessages))
 
 	a.Start(ctx, hup)
-	<-ctx.Done()
+	select {
+	case <-ctx.Done():
+	case <-a.Done():
+		log.Print("shutdown requested from Telegram")
+	}
 	log.Print("shutting down")
 }
 
