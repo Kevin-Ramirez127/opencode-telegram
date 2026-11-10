@@ -453,7 +453,7 @@ func TestAgentsCommandSwitchesAgent(t *testing.T) {
 }
 
 func TestModelsCommandListsAvailableModels(t *testing.T) {
-	a, ftg, _ := newIntegrationApp(t)
+	a, ftg, foc := newIntegrationApp(t)
 	a.setBinding(123, "ses_1")
 
 	a.handleCommand(123, 123, "/models")
@@ -461,18 +461,48 @@ func TestModelsCommandListsAvailableModels(t *testing.T) {
 	all := ftg.allText()
 	for _, want := range []string{
 		"Available models (2)",
-		"DeepSeek V4 Flash",
-		"GPT-6",
 		"Current: `opencode-go/deepseek-v4-flash`",
-		"**opencode-go**",
-		"**opencode**",
 	} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("models message missing %q:\n%s", want, all)
 		}
 	}
-	if strings.Contains(all, "Old Model") {
-		t.Fatalf("disabled model should not be listed:\n%s", all)
+
+	modelKeys := make(map[string]bool)
+	a.mu.Lock()
+	for _, act := range a.actions {
+		if act.Kind == "model" {
+			modelKeys[act.Decision+"/"+act.Value] = true
+		}
+	}
+	a.mu.Unlock()
+	if !modelKeys["opencode-go/deepseek-v4-flash"] || !modelKeys["opencode/gpt-6"] {
+		t.Fatalf("model buttons = %v, want both enabled models", modelKeys)
+	}
+	if modelKeys["opencode/old-model"] {
+		t.Fatalf("disabled model should not have a button: %v", modelKeys)
+	}
+
+	token, _ := findAction(t, a, "model", "gpt-6")
+	a.handleCallbackFrom(123, 42, callbackData(token))
+	if got := ftg.lastText(); !strings.Contains(got, "Model switched to `opencode/gpt-6`") {
+		t.Fatalf("switch feedback = %q", got)
+	}
+	foc.mu.Lock()
+	switched := foc.switchedModel
+	foc.mu.Unlock()
+	if switched.ProviderID != "opencode" || switched.ID != "gpt-6" {
+		t.Fatalf("switched model = %+v", switched)
+	}
+}
+
+func TestModelsCommandRequiresBoundSession(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+
+	a.handleCommand(123, 123, "/models")
+
+	if got := ftg.lastText(); !strings.Contains(got, "No session bound") {
+		t.Fatalf("models feedback = %q", got)
 	}
 }
 

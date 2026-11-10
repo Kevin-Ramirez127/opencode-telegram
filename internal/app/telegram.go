@@ -425,7 +425,7 @@ func (a *App) handleCallbackFrom(chatID int64, messageID int, data string) {
 	}
 	if act.ChatID != 0 && act.ChatID != chatID {
 		switch act.Kind {
-		case "agent", "daemon_exit", "poweroff", "confirm_cancel":
+		case "agent", "model", "daemon_exit", "poweroff", "confirm_cancel":
 			a.send(chatID, "⚠️ This button belongs to another chat.")
 			return
 		}
@@ -450,6 +450,8 @@ func (a *App) handleCallbackFrom(chatID int64, messageID int, data string) {
 		a.send(chatID, fmt.Sprintf("🔗 Bound to %s.\nType your message now.", a.sessionLabel(act.SessionID)))
 	case "agent":
 		a.switchAgent(chatID, messageID, act.SessionID, act.Value)
+	case "model":
+		a.switchModel(chatID, messageID, act.SessionID, act.Decision, act.Value)
 	case "show_thinking":
 		a.showThinking(chatID, act)
 	case "summarize_thinking":

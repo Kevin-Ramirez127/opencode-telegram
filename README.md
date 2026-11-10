@@ -273,7 +273,7 @@ Change them from the plugin (which asks for confirmation) or by editing
 | `/bind <session-id>` | Bind this chat to a session |
 | `/unbind` | Remove the binding |
 | `/agents [agent-id]` | List or switch the bound session's agent |
-| `/models` | List every available chat model |
+| `/models` | List every available chat model with a switch button for each |
 | `/interrupt` | Interrupt the bound session's current run |
 | `/notify on\|off` | Toggle notification delivery |
 | `/settings` | Show current notification/security settings |
@@ -289,9 +289,9 @@ confirmation button is pressed. Cancel buttons dismiss the request.
 
 `/agents` lists the primary agents for the bound session and lets you switch
 with a button (or pass an agent id directly). `/models` lists every enabled
-chat model grouped by provider, marking the model currently selected for the
-bound session. Finished-session notifications include an `Agent:` line showing
-the agent that handled the run.
+chat model with one switch button per model, marking the model currently
+selected for the bound session. Finished-session notifications include an
+`Agent:` line showing the agent that handled the run.
 
 The daemon also adds its commands to the bot menu if they are missing. Existing
 bot commands are preserved, so commands registered with BotFather are not
