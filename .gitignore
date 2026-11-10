@@ -8,7 +8,12 @@
 /dist/
 *.log
 /.run/
+node_modules/
 
-# Backups made by manage_commands.sh
-data/*
-commands/
+# Backups / temporary files created by scripts
+data/*.bak
+data/.tmp-*
+
+# Local state (the repository tracks data/*.example.json instead)
+data/allowlist.json
+data/settings.json

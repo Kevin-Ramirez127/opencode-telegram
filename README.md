@@ -1,478 +1,363 @@
-# telegram-pc-remote
+# opencode-telegram
 
-A Telegram bot that remote-controls your PC through **pre-defined action
-buttons**. You define a set of commands — each backed by a **shell script**
-that you author in the `commands/` folder. When a whitelisted user presses a
-button — or types its exact label — the bot runs the registered script and
-sends its output back as the response. If the text does **not** match any
-command, the bot answers with an error message.
+A Telegram daemon for [OpenCode](https://opencode.ai). It listens to OpenCode's
+live event stream for **all sessions** and notifies your allowlisted Telegram
+chats when:
 
-Backend: **Go**. Command management: **bash** (`scripts/manage_commands.sh`).
+- a session finishes, fails, or is interrupted;
+- the agent asks a **question** (an OpenCode form that needs a human answer);
+- the agent requests a **permission**;
+- (optionally) a provider retry is scheduled.
 
----
+When you explicitly enable it, the same chat can answer questions, decide
+permissions, bind to a session, and send new prompts to OpenCode.
 
-## Features
+Notifications are **off by default**. Arbitrary answers and new prompts are
+**off by default** too, because a Telegram account is not a trusted prompt
+source.
 
-| Feature | Where |
-|---|---|
-| Inline keyboard menu generated from configured commands | `service.go` (`showMenu`) |
-| Button/callback text must match a stored command, otherwise an error is sent | `service.go` (`runCommand`) |
-| Commands are user-authored `.sh` files in `commands/`, executed with `sh` | `internal/actions` |
-| Output can be wrapped in a response template (`${output}`, `\n`, `\t`) | `internal/actions` / `internal/store` |
-| Image commands: `--img` makes the printed path the photo (template = caption) | `internal/actions` |
-| Menu commands: a button that answers with option buttons; each option calls its own script or hands its value to one shared handler (`$1` / `TPR_OPTION`) | `service.go` / `internal/actions` |
-| User **and** chat allowlist (both must match) | `internal/whitelist` |
-| Rate limiting: at most 1 message per chat per second; extras are ignored | `internal/ratelimit` |
-| Add / list / edit / delete commands from a shell script | `scripts/manage_commands.sh` |
-| Live reload of commands & whitelist (every 5 s or on `SIGHUP`) | `service.go` (`refreshLoop`) |
+Backend: **Go**. Control/install scripts: **bash**.
 
 ---
 
-## Set up your Telegram Bot
-### 1. Go to your Telegram app / Telegram Web and start a chat with ```@BotFather``` and send  ```/newbot```.
-### 2. Set up the bot name (is the visible name in chat).
-### 3. Create your bot username (_not bot name_), if you want to make a safer bot read [safe bot advice](safe_bot_advices.md) file.
-### 4. ```@BotFather``` will give to you the chatbot link and ```API Key```
+## Architecture
 
-## Configure Telegram Bot
+```
+┌──────────────────────┐        SSE /api/event         ┌────────────────────────┐
+│  OpenCode background │ ◄──────────────────────────── │  opencode-telegram     │
+│  service (v2 API)    │                              │  Go daemon             │
+│                      │  REST: sessions, forms,      │                        │
+│  sessions / forms /  │  permissions, prompts        │  state machine         │
+│  permissions         │ ────────────────────────────► │  allowlist + settings  │
+└──────────────────────┘                              └───────────┬────────────┘
+                                                                  │ Telegram Bot API
+                                                                  ▼
+                                                      ┌────────────────────────┐
+                                                      │  allowlisted chats     │
+                                                      └────────────────────────┘
+                                                                  ▲
+                                                                  │ PATCH settings
+                                                      ┌───────────┴────────────┐
+                                                      │ OpenCode plugin (TUI)   │
+                                                      │ /telegram               │
+                                                      └────────────────────────┘
+```
+
+The daemon discovers the local OpenCode service from
+`~/.local/state/opencode/service.json`, authenticates with its password, and
+subscribes to the filtered event stream. It reconnects with backoff and
+reconciles pending forms/permissions after a reconnect.
+
+The companion plugin lives in this repository at
+`plugins/opencode-telegram`. The
+[`opencode-tools`](https://github.com/Kevin-Ramirez127/opencode-tools)
+repository links to it with a `plugins/opencode-telegram` symlink, so existing
+config paths there keep working. The plugin edits the daemon settings through
+a loopback HTTP API.
+
+---
+
+## Install
+
+Requirements: Go >= 1.23, `jq`, and a Telegram bot token from
+[@BotFather](https://t.me/BotFather).
 
 ```bash
-# 1. Configure
-cp .env.example .env          # set TELEGRAM_BOT_TOKEN (from @BotFather) you got on previous step
-chmod 600 .env
-
-# 2. Whitelist yourself (numeric IDs — get them from @userinfobot)
-#    telegram-remote config --adduser <your-id>   # allowlists user+chat (covers DMs)
-#    telegram-remote config --list                 # show the allowlist
-#    (for group chats with a different chat id: config --addchat <chat-id>)
-
-# 3. Author scripts and register buttons
-scripts/manage_commands.sh add "System Status" --script status.sh --timeout 15
-scripts/manage_commands.sh add "Screenshot"    --script screenshot.sh --img \
-                            --template '📸 Screenshot taken'
-scripts/manage_commands.sh add "Hello"         --script hello.sh
-
-# 4. Run
-make run      # or: TELEGRAM_BOT_TOKEN=... ./bin/telegram-pc-remote
+git clone <this repo>
+cd <this repo>
+./install.sh
 ```
 
-Then open the chat with your bot, send `/menu` (or `/start`) and press a
-button. Pressing a button whose text has no matching command produces:
+The installer builds `bin/opencode-telegram`, installs a self-contained copy to
+`~/.local/share/opencode-telegram`, and creates the
+`~/.local/bin/opencode-telegram` command.
 
+```bash
+# 1. Allowlist yourself (numeric IDs from @userinfobot)
+opencode-telegram config --adduser <your-user-id>
+
+# 2. Start the daemon
+opencode-telegram start
+opencode-telegram logs -f
+
+# 3. Status / reload / stop
+opencode-telegram status
+opencode-telegram reload
+opencode-telegram stop
 ```
-⚠️ Unknown command: "xyz". Send /menu to see the available buttons.
+
+For a persistent user service:
+
+```bash
+./install.sh --systemd
+# or copy packaging/opencode-telegram.service manually and:
+systemctl --user enable --now opencode-telegram
 ```
+
+### Configuration
+
+Copy `.env.example` to `.env`, or use the installed
+`~/.local/share/opencode-telegram/.env`:
+
+```ini
+TELEGRAM_BOT_TOKEN=...
+
+# Optional: omit to auto-discover the local OpenCode service.
+# OPENCODE_URL=http://127.0.0.1:4096
+# OPENCODE_PASSWORD=...
+
+# Loopback settings API used by the plugin.
+# LISTEN_ADDR=127.0.0.1:8787
+# PLUGIN_TOKEN=
+# DATA_DIR=./data
+```
+
+Discovery paths, in order:
+
+1. `OPENCODE_SERVICE_FILE` (if set);
+2. `$XDG_STATE_HOME/opencode/service.json` or
+   `~/.local/state/opencode/service.json`;
+3. `$XDG_CONFIG_HOME/opencode/service.json` or
+   `~/.config/opencode/service.json`.
+
+`OPENCODE_URL` / `OPENCODE_PASSWORD` override discovery.
 
 ---
 
-## How commands work
+## Allowlist
 
-A command is a **button label** (`text`) plus a **script file** (`script`,
-relative to the commands directory — `commands/` by default). The script:
-
-- is a plain shell script you create yourself (e.g. `commands/status.sh`);
-- runs with `sh <script>` in the **commands directory** as its working
-  directory, so relative paths inside scripts behave predictably;
-- has its **stdout** (stdout+stderr) captured and returned to the chat;
-- output is trimmed and capped at ~3.5 KB.
+`data/allowlist.json` requires **both** the sending user **and** the chat:
 
 ```json
 {
-  "text": "System Status",
-  "script": "status.sh",
-  "timeout_sec": 15
+  "users": [123456789],
+  "chats": [123456789]
 }
 ```
 
-### Response templates
+In a DM the user id and chat id are the same, so `config --adduser` adds the id
+to both lists. For a group/channel use `config --addchat <chat-id>` as well.
 
-With `--template '...'` you can wrap the script's output. The placeholder
-`${output}` is replaced by the script's output, and `\n` / `\t` become real
-newlines/tabs (handy for multi-line replies on a single command line):
+`data/allowlist.json` and `data/settings.json` are local state and are
+gitignored; the tracked templates are `data/allowlist.example.json` and
+`data/settings.example.json`. `./install.sh` seeds the local files on first
+install.
 
-```bash
-scripts/manage_commands.sh add "System Report" --script report.sh \
-  --template '📊 System report:\n${output}' --timeout 20
-```
+The daemon is fail-closed: a missing or corrupt file denies everyone, and
+unauthorized updates are dropped silently.
 
-### Image commands (`--img`)
-
-When a command has the `--img` flag, its script's output is treated as a
-**path to an image file** (absolute, or relative to the commands directory).
-The bot reads that file and sends it as a **photo**. The `--template` text, if
-present, becomes the photo's caption:
+Manage it without editing JSON:
 
 ```bash
-scripts/manage_commands.sh add "Screenshot" --script screenshot.sh --img \
-  --template '📸 Screenshot taken'
+opencode-telegram config --adduser 123456789
+opencode-telegram config --addchat -1001234567890
+opencode-telegram config --list
+opencode-telegram config --deluser 123456789
 ```
 
-The image path is validated before sending: it must be a regular file, stay
-under the 9 MiB cap, and its magic bytes must identify a PNG/JPEG/GIF/WebP/BMP
-— arbitrary binaries are never sent to the chat.
+Changes are reloaded automatically (SIGHUP is sent by the config command).
 
-### Menu commands (a button that answers with options)
+---
 
-A **menu command** is a button that, when pressed (or when its text is
-typed), replies with a **prompt plus option buttons**. You create the options
-yourself; pressing one either
+## Settings and the plugin
 
-- runs that option's **own script**, or — when it has none — runs the menu's
-  **shared handler script**, which receives the option as a variable
-  (`$1` and `TPR_OPTION`; the button label as `TPR_OPTION_LABEL`), so a
-  single script can branch on the choice — that's up to you when you write it.
-- **opens another menu** (a nested submenu) declared with `--menu` on
-  `addopt`. The referenced menu can be hidden from the main `/menu` keyboard
-  (`--hidden` on `addmenu`), so it only exists as a submenu target.
+Notifications are controlled from the OpenCode plugin:
 
-```bash
-# 1. create the menu button (a handler script is optional here)
-scripts/manage_commands.sh addmenu "Change Workspace" --prompt "Select Workspace:" \
-  --script workspace.sh --timeout 15
-
-# 2. add option buttons 1..5 (each falls back to workspace.sh)
-for i in 1 2 3 4 5; do
-  scripts/manage_commands.sh addopt "Change Workspace" --label "$i"
-done
-
-# an option can instead call its own script (overrides the handler)
-scripts/manage_commands.sh addopt "Change Workspace" --label "Custom" --value 9 --script status.sh
-
-# an option can open a nested (custom) menu — the target may be hidden
-scripts/manage_commands.sh addmenu "Media" --prompt "Media actions:" --script media.sh
-scripts/manage_commands.sh addmenu "Volume Menu" --hidden --prompt "Volume:" --script volume.sh
-scripts/manage_commands.sh addopt "Media" --label "Volume" --menu "Volume Menu"
-scripts/manage_commands.sh addopt "Volume Menu" --label "+" --value +2
-scripts/manage_commands.sh addopt "Volume Menu" --label "-" --value -2
-
-scripts/manage_commands.sh opts "Change Workspace"        # list options
-scripts/manage_commands.sh delopt "Change Workspace" --label 5
+```jsonc
+// ~/.config/opencode/opencode.jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": [
+    "/home/<you>/opencode-telegram/plugins/opencode-telegram"
+  ]
+}
 ```
 
-**After any script finishes — a plain script command like `report.sh` or a
-menu option — the bot re-sends the general menu** (the `/menu` keyboard with
-every non-hidden command), so you're back at the top level and can pick any
-other command. Descending into a nested menu (via `--menu`) sends nothing
-extra — the nested menu's options just appear — and the general menu only
-comes back after the **final** (leaf) script of the flow has replied. A
-navigation press never triggers a re-send itself.
-
-`commands/workspace.sh` is a shared handler example: it reads the pressed
-value from `$1` / `TPR_OPTION` (replace the `echo` with `wmctrl -s "$1"`,
-`i3-msg workspace`, etc. for real desktop switching).
+Then run `/telegram` in the TUI (or the palette command **OpenCode Telegram
+notifications**). It edits `data/settings.json` through the daemon API:
 
 ```json
 {
-  "text": "Change Workspace",
-  "menu": {
-    "id": "change-workspace",
-    "prompt": "Select Workspace:",
-    "script": "workspace.sh",
-    "options": [
-      { "label": "1" },
-      { "label": "Custom", "value": "9", "script": "status.sh" }
-    ]
+  "notifications": {
+    "enabled": false,
+    "session_done": true,
+    "session_failed": true,
+    "session_interrupted": true,
+    "question_asked": true,
+    "permission_asked": true,
+    "retry": false,
+    "include_child_sessions": false,
+    "include_last_message": true,
+    "include_directory": true,
+    "notify_chats": []
   },
-  "timeout_sec": 15
-}
-```
-
-A nested menu reference adds `menu_id` to an option (the referenced menu is
-just another menu command, usually `hidden: true`):
-
-```json
-{
-  "text": "Media",
-  "menu": {
-    "id": "media",
-    "prompt": "Media actions:",
-    "script": "media.sh",
-    "options": [ { "label": "Volume", "menu_id": "volume-menu" } ]
+  "security": {
+    "allow_custom_form_answers": false,
+    "allow_new_messages": false
   }
 }
 ```
 
-| Field | Meaning |
-|---|---|
-| `menu.id` | short stable handle used in the option buttons' callback data (auto-generated; `--menu-id` to override) |
-| `menu.prompt` | text above the option buttons (`\n`/`\t` expand) — default "Select an option:" |
-| `menu.script` | shared handler; runs for options that have no script of their own |
-| `options[].label` | button text, also the value passed on press (unless `value` is set) |
-| `options[].value` | optional value passed to the handler instead of the label |
-| `options[].script` | optional per-option script (overrides the shared handler) |
-| `options[].menu_id` | optional; pressing the option opens the referenced menu instead of running a script (no `script`/`value` allowed together) |
-| `hidden` | hides the command from the `/menu` keyboard — use it for submenu targets |
+`notify_chats` empty means “every allowlisted chat”. Entries must themselves be
+allowlisted; the API rejects anything else.
 
-### Starter example commands
+`include_child_sessions` is off by default: subagent/child sessions finish
+often and usually should not page you.
 
-A fresh install starts with just the whitelist — no commands yet. These short
-example scripts live in the `commands/` directory and give you something to
-play with immediately. Copy-paste this whole block once; edit the scripts to
-match your desktop afterwards (`status.sh`, `report.sh` and `hello.sh` work
-everywhere; `screenshot.sh`/`workspace.sh` target Sway/Wayland, `lock.sh`
-uses `loginctl`):
+### Security switches
 
-```bash
-./scripts/manage_commands.sh add "Hello" --script hello.sh
-./scripts/manage_commands.sh add "System Status" --script status.sh
-./scripts/manage_commands.sh add "System Report" --script report.sh \
-  --template '📊 System report:\n${output}' --timeout 20
-./scripts/manage_commands.sh add "Screenshot" --script screenshot.sh \
-  --img --template '📸 Screenshot taken' --timeout 30
-./scripts/manage_commands.sh add "Lock PC" --script lock.sh
-
-# a menu: one button -> 5 option buttons, all handled by workspace.sh
-./scripts/manage_commands.sh addmenu "Change Workspace" \
-  --prompt "Select Workspace:" --script workspace.sh --timeout 15
-for i in 1 2 3 4 5; do
-  ./scripts/manage_commands.sh addopt "Change Workspace" --label "$i"
-done
-```
-
-Press `/menu` on Telegram: the six buttons appear. Press `Change Workspace`
-to get the workspace options; after any script's reply the general menu is
-re-sent automatically. Replace the example `echo`s with real actions (e.g.
-`wmctrl -s "$1"`/`i3-msg workspace "$1"` in `workspace.sh`, your own lock
-command in `lock.sh`) whenever you like — scripts are read fresh on every
-press.
-
-### Management script
-
-```bash
-# add a plain script command
-./scripts/manage_commands.sh add "Lock PC" --script lock.sh --timeout 10
-./scripts/manage_commands.sh add "Uptime"  --script status.sh
-./scripts/manage_commands.sh add "Screenshot" --script screenshot.sh --img --template '📸 Shot'
-
-# add a menu command (button that answers with option buttons)
-./scripts/manage_commands.sh addmenu "Change Workspace" --prompt "Select Workspace:" --script workspace.sh
-for i in 1 2 3 4 5; do ./scripts/manage_commands.sh addopt "Change Workspace" --label "$i"; done
-./scripts/manage_commands.sh addopt "Change Workspace" --label "Custom" --value 9 --script status.sh
-
-# nested (custom) submenu: an option that opens another menu
-./scripts/manage_commands.sh addmenu "Volume Menu" --hidden --prompt "Volume:" --script volume.sh
-./scripts/manage_commands.sh addopt "Media" --label "Volume" --menu "Volume Menu"
-
-# list
-./scripts/manage_commands.sh list
-./scripts/manage_commands.sh list --json
-./scripts/manage_commands.sh opts "Change Workspace"          # a menu's options
-./scripts/manage_commands.sh delopt "Change Workspace" --label 5
-
-# edit (change any subset; --img/--no-img flip the flag, --timeout 0 resets)
-./scripts/manage_commands.sh edit "Lock PC" --rename "Lock Screen" --timeout 20
-./scripts/manage_commands.sh edit "Uptime" --script uptime.sh --template 'Uptime: ${output}'
-./scripts/manage_commands.sh edit "Change Workspace" --menu-prompt "Pick a desktop:"
-
-# delete
-./scripts/manage_commands.sh delete "Hello"
-```
-
-**Schema of one command** (`data/commands.json`, version 2) — plain:
-
-```json
-{
-  "text": "System Status",
-  "script": "status.sh",
-  "template": "Uptime: ${output}",
-  "img": false,
-  "timeout_sec": 15
-}
-```
-
-or a menu:
-
-```json
-{
-  "text": "Change Workspace",
-  "menu": {
-    "id": "change-workspace",
-    "prompt": "Select Workspace:",
-    "script": "workspace.sh",
-    "options": [ { "label": "1" } ]
-  },
-  "timeout_sec": 15
-}
-```
-
-| Field | Meaning |
-|---|---|
-| `text` | button label AND exact text to match (1–64 chars) |
-| `script` | `.sh` file to run, relative to the commands directory (plain commands) |
-| `menu` | options submenu instead of a script (see the menu section above) |
-| `hidden` | optional; hides the command from `/menu` (submenu targets) |
-| `template` | optional; `${output}` = script output, `\n`/`\t` = newline/tab (caption for `--img` commands; plain commands only) |
-| `img` | optional; when true the script's output is a path to an image sent as a photo |
-| `timeout_sec` | optional, 1–300 (default 30) |
-
-Templates are validated at load time: they may only reference `${output}`,
-so there is no injection vector through template text.
-
-The script:
-
-- **escapes everything through `jq`** — quotes, backticks and `$` in values
-  cannot break out of the JSON or the shell;
-- **validates the result before installing it** (schema, duplicate texts,
-  script containment and existence, template placeholders, timeout bounds)
-  and writes atomically (`tmp` + `rename`);
-- keeps a backup at `data/commands.json.bak`;
-- refuses to run without `jq` (a one-line message explains how to install it).
-
-> Built-in navigation commands are `/start`, `/menu`, `/commands` and
-> `/help`. They are not stored in the command list, and they take precedence
-> over any command named with a leading `/`.
-
----
-
-## Security model
-
-This bot is a remote-access tool, so it is deliberately paranoid. The threat
-model: *anyone on the internet can send messages to your bot*; the bot must
-treat every update as hostile until proven trustworthy.
-
-### 1. Allowlist (fail closed)
-
-- `data/whitelist.json` holds numeric **user IDs** and **chat IDs**.
-- An update is processed **only if the sender AND the chat are both
-  allowlisted** (`internal/whitelist`).
-- Missing, corrupt, or empty whitelist = **deny everything**. The bot
-  refuses to start on a missing/corrupt file, and starts deny-all on an empty
-  one.
-- Unauthorized updates are dropped **silently** — no reply, no callback ack —
-  so the bot never confirms its existence or reveals its command set to
-  strangers.
-- A failed reload keeps the previous valid allowlist in memory (a bad edit
-  can neither lock you out nor let anyone in).
-
-### 2. Rate limiting
-
-- One token bucket **per chat**, capacity exactly 1, refill 1/sec
-  (`internal/ratelimit`). More than one message per second from the same
-  chat → the extras are ignored, no burst is ever allowed.
-- Checks run *after* the allowlist and *before* any command executes.
-
-### 3. Commands are pre-approved — never free-form
-
-- Users can only trigger commands the **operator** has defined. There is no
-  path for a user to inject text into a shell command.
-- Menu option buttons are just indices into the stored menu: pressing one
-  runs the option's script (or the shared handler, with the operator-defined
-  option value as `$1` / `TPR_OPTION`). The value never touches the command
-  line as free input — it is an argument to an approved `sh` invocation.
-- Script paths come from the operator-approved store and are launched in
-  `argv` form (`sh <path>`), never through `sh -c` with unfiltered input — so
-  there is no shell-injection surface. Paths must be relative, stay inside
-  the commands directory, and point at an existing regular `.sh` file
-  (checked again at execution time as defense in depth).
-- The `.sh` script is the only intended way to change commands, and it
-  validates before writing.
-
-### 4. Shell execution hardening
-
-Applies to every command script:
-
-- Every script gets a timeout (`timeout_sec`, hard-capped at 300 s) plus a
-  global cap on command duration (`BOT_MAX_COMMAND_SECONDS`).
-- The script runs in its **own process group** (`setsid`); on timeout the
-  whole subtree is killed with `SIGKILL`, not just the `sh` parent.
-- The environment is stripped to a minimal `PATH` — no `HOME`, no secrets,
-  no inherited variables.
-- The working directory is the commands directory (so relative paths inside
-  scripts and image replies work) and output is truncated (~3.5 KB) so a chat
-  cannot be flooded past Telegram's message limit.
-- Concurrency is bounded (`BOT_MAX_CONCURRENT`); panics are caught so a bad
-  update cannot take the bot down.
-
-**Image validation** — `--img` replies are read from a path printed by the
-script, then sanity-checked: regular file, ≤ 9 MiB, and magic bytes must match
-a known image format. Nothing else is ever sent to the chat.
-
-**Template validation** — templates may only reference `${output}`; an
-unknown `${name}` placeholder is a load-time error.
-
-### 5. Secrets & files
-
-- The token comes from `TELEGRAM_BOT_TOKEN` (env or `.env`, `chmod 600`,
-  git-ignored) and is **never logged** — only the bot username is printed.
-- `commands.json` / `whitelist.json` are written with `0600` (script and
-  `safeio`); all writes are atomic (temp file → fsync → rename), so the bot
-  and the script can never observe a torn file.
-- Logs contain only IDs and command names — never message bodies or shell
-  output.
-
-### 6. Runtime reload
-
-- Commands and the whitelist are checked every `BOT_RELOAD_SECONDS` (5 s)
-  and re-read when the file changes (mtime/size), or immediately on
-  `SIGHUP` — no restart needed to add users or buttons. Script files are read
-  fresh on every press, so editing a script needs no reload at all.
-
----
-
-## Configuration
-
-| Variable | Default | Meaning |
+| Setting | Default | Effect |
 |---|---|---|
-| `TELEGRAM_BOT_TOKEN` | — (required) | Bot token from @BotFather |
-| `DATA_DIR` | `data` | Directory holding `commands.json` + `whitelist.json` |
-| `COMMANDS_DIR` | `commands` | Directory holding the user-authored `.sh` scripts |
-| `BOT_RELOAD_SECONDS` | `5` | Config-file re-check interval |
-| `BOT_MAX_CONCURRENT` | `4` | Max updates processed in parallel |
-| `BOT_MAX_COMMAND_SECONDS` | `600` | Hard cap per command execution |
+| `allow_custom_form_answers` | `false` | Adds **“Type your own response”** to questions. Without it, only the options offered by the form (or answering inside OpenCode) are possible. |
+| `allow_new_messages` | `false` | Lets free-text Telegram messages become prompts for the chat's bound session. |
 
-An optional `.env` file is read for local convenience; real environment
-variables always win. For systemd, prefer `EnvironmentFile=`.
+They are intentionally **not** exposed as Telegram commands: a compromised
+Telegram session must not be able to grant itself prompt-injection rights.
+Change them from the plugin (which asks for confirmation) or by editing
+`data/settings.json` locally.
 
-## Install (`./install.sh`)
+---
 
-`./install.sh` builds the bot, asks for the Telegram token (unless
-`TELEGRAM_BOT_TOKEN` is exported or `--no-prompt` is given), and installs a
-self-contained copy — the repo checkout is not needed at runtime:
+## Telegram commands
+
+| Command | Meaning |
+|---|---|
+| `/start`, `/help` | Command list and security notes |
+| `/status` | Daemon, OpenCode, allowlist, and pending-work status |
+| `/sessions` | Recent sessions with bind buttons |
+| `/bind <session-id>` | Bind this chat to a session |
+| `/unbind` | Remove the binding |
+| `/interrupt` | Interrupt the bound session's current run |
+| `/notify on\|off` | Toggle notification delivery |
+| `/settings` | Show current notification/security settings |
+| `/test` | Send a test notification to the allowed chats |
+| `/id` | Show your Telegram user/chat ids |
+
+After `/sessions` + bind, free text is sent to that session **only when**
+`allow_new_messages` is on. Otherwise the bot replies with a reminder.
+
+### Question flow
+
+When OpenCode creates a form:
+
+1. the daemon posts the question with inline buttons for options, boolean
+   fields, or multiselect toggles;
+2. if `allow_custom_form_answers` is on, a **“Type your own response”** button
+   starts a one-shot text prompt;
+3. the answer is submitted to the exact form/session via
+   `POST /api/session/{id}/form/{formID}/reply`;
+4. the form is removed when OpenCode reports `form.replied` or
+   `form.cancelled`.
+
+Multi-field forms are walked field by field. Optional fields get a **Skip**
+button.
+
+### Permission flow
+
+Permission requests show **Allow once**, **Always allow**, and **Reject**
+buttons. The decision is sent to
+`POST /api/session/{id}/permission/{requestID}/reply`.
+
+---
+
+## Local settings API
+
+The daemon listens on `127.0.0.1:8787` by default. With `PLUGIN_TOKEN` set,
+every request needs `Authorization: Bearer <token>`.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health` | Daemon/OpenCode status |
+| `GET` | `/api/plugin/status` | Same status, plugin-friendly name |
+| `GET` | `/api/plugin/settings` | `{settings, status}` |
+| `PATCH` | `/api/plugin/settings` | Partial settings update |
+| `POST` | `/api/plugin/test-notification` | Send a test message |
+| `GET` | `/api/plugin/sessions` | Recent sessions |
+
+Example patch:
+
+```bash
+curl -X PATCH http://127.0.0.1:8787/api/plugin/settings \
+  -H 'content-type: application/json' \
+  -d '{"notifications":{"enabled":true}}'
+```
+
+---
+
+## How completion is detected
+
+The daemon subscribes to these OpenCode events (plus the always-sent
+`server.connected` marker):
 
 ```
-~/.local/bin/telegram-remote            the command: start|stop|restart|status|logs|reload|run|config
-~/.local/share/telegram-remote/         app root: bin/, scripts/, .env, data/, commands/, bot.log, .run/
+session.status
+session.idle
+session.execution.started
+session.execution.succeeded
+session.execution.failed
+session.execution.interrupted
+form.created / form.replied / form.cancelled
+permission.asked / permission.replied
+session.created / session.renamed / session.deleted
 ```
 
-Reinstalls refresh the binary and control script but never overwrite your
-`.env`, `data/*.json` or `commands/*.sh`. `make uninstall` removes the program
-and keeps that user state. `PREFIX=... ./install.sh` changes the prefix.
+`session.execution.*` is the primary outcome signal; `session.idle` is the
+fallback for runs that only report idleness. A per-session flag prevents the
+usual `execution.succeeded` → `idle` pair from producing two notifications.
+On reconnect, active sessions and pending forms/permissions are reconciled.
 
-## Project layout
-
-```
-main.go                     entry point, bot wiring
-service.go                  update pipeline: allowlist → rate limit → dispatch
-commands/                   your .sh scripts (one per command button)
-internal/
-  actions/                  hardened script execution + result/image handling
-  config/                   env/config loading
-  ratelimit/                per-chat 1 msg/sec token bucket
-  safeio/                   atomic 0600 file writes
-  store/                    validated command store (lookup, list, menu data)
-  whitelist/                user+chat allowlist, fail closed
-data/
-  commands.json             command definitions
-  whitelist.json            user/chat allowlist
-scripts/
-  manage_commands.sh        add / list / edit / delete commands
-```
+---
 
 ## Development
 
 ```bash
-make test       # unit tests (store, whitelist, ratelimit, actions, …)
-make vet        # go vet
-make build      # ./bin/telegram-pc-remote
+make build       # bin/opencode-telegram
+make test        # go test ./...
+make vet
+make fmt
+make run         # foreground
+make check       # validate config + connectivity
 ```
 
-To try the command script without touching the real data file:
+Layout:
 
-```bash
-COMMANDS_FILE=/tmp/demo.json ./scripts/manage_commands.sh add "Ping" --script ping.sh --timeout 20
-COMMANDS_FILE=/tmp/demo.json ./scripts/manage_commands.sh list
+```
+main.go                     wiring, flags, discovery
+internal/config             env/.env + paths
+internal/occlient           OpenCode API client, SSE stream, discovery
+internal/app                daemon state, Telegram, forms, permissions, HTTP API
+internal/settings           settings file + validation
+internal/whitelist          fail-closed user/chat allowlist
+internal/ratelimit          one update per chat per second
+internal/safeio             atomic 0600 writes
+plugins/opencode-telegram   OpenCode TUI settings plugin
+data/*.example.json         tracked allowlist/settings templates
+data/*.json                 local state (gitignored)
+scripts/daemon.sh           start/stop/logs/config/settings
+packaging/                  systemd user unit
 ```
 
-(remember `COMMANDS_DIR` is `commands/` relative to the script; point `ping.sh`
-to a file that exists, e.g. `COMMANDS_DIR=/tmp ./scripts/manage_commands.sh add "Ping" --script my.sh`
-with `my.sh` in `/tmp`.)
+---
+
+## Security notes
+
+- **Two-key gate:** a message is accepted only if both the user and the chat
+  are allowlisted. Unauthorized updates get no response at all.
+- **Deny-all on error:** missing/corrupt allowlist = nobody can use the bot.
+- **Notifications off:** no session data leaves the machine until enabled.
+- **No arbitrary injection by default:** custom answers and new prompts are
+  separate opt-ins.
+- **Loopback API:** the settings API binds to `127.0.0.1`; add a
+  `PLUGIN_TOKEN` if other local users are a concern, and do not expose it to
+  the internet.
+- **No secrets in logs:** tokens and passwords are never logged.
+- **Rate limiting:** at most one typed message per chat per second. Callback
+  presses (buttons) are not throttled here so multiselect forms stay usable.
+- **Callback tokens:** Telegram `callback_data` is a short random token mapped
+  server-side, so no session/question content is embedded in buttons.
+
+See [`safe_bot_advices.md`](safe_bot_advices.md) for bot-specific hygiene.
+
+## License
+
+GPL-3.0. See [LICENCE](LICENCE).

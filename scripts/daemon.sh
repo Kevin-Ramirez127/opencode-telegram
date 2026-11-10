@@ -1,48 +1,65 @@
 #!/usr/bin/env bash
 #
-# bot.sh — start / stop / restart the telegram-pc-remote bot (background daemon).
+# daemon.sh — start / stop / restart the opencode-telegram daemon.
 #
-# Installed as `telegram-remote` in ~/.local/bin (via ./install.sh): the
-# installer copies the app to ~/.local/share/telegram-remote and generates a
-# small wrapper there, so `telegram-remote ...` runs the installed copy from
-# anywhere (nothing is read from the repo checkout at runtime).
+# Installed as `opencode-telegram` in ~/.local/bin by install.sh: the installer
+# copies the app to ~/.local/share/opencode-telegram and generates a wrapper,
+# so `opencode-telegram ...` runs the installed copy from anywhere.
 #
 # Usage:
-#   ./scripts/bot.sh start [--foreground]   start the bot (background by default)
-#   telegram-remote start                    same, once installed
-#   ./scripts/bot.sh stop                    stop the bot
-#   ./scripts/bot.sh restart                 restart the bot
-#   ./scripts/bot.sh status                  show whether the bot is running
-#   ./scripts/bot.sh logs [-f]               show bot.log (follow with -f)
-#   ./scripts/bot.sh reload                  live-reload commands.json + whitelist.json (SIGHUP)
-#   ./scripts/bot.sh run                     run in foreground (same as start --foreground)
-#   ./scripts/bot.sh config --adduser <id>   allowlist a user id (also adds it as a chat, which covers DMs)
-#   ./scripts/bot.sh config --deluser <id>   remove a user id from the allowlist
-#   ./scripts/bot.sh config --addchat <id>   allowlist a group/channel chat id
-#   ./scripts/bot.sh config --delchat <id>   remove a chat id from the allowlist
-#   ./scripts/bot.sh config [--list]         show allowlisted users + chats
+#   ./scripts/daemon.sh start [--foreground]   start the daemon
+#   ./scripts/daemon.sh stop                   stop the daemon
+#   ./scripts/daemon.sh restart                restart the daemon
+#   ./scripts/daemon.sh status                 show whether it is running
+#   ./scripts/daemon.sh logs [-f]              show the log (follow with -f)
+#   ./scripts/daemon.sh reload                 reload allowlist + settings (SIGHUP)
+#   ./scripts/daemon.sh run                    run in the foreground
+#   ./scripts/daemon.sh check                  validate config and connectivity
+#   ./scripts/daemon.sh config [options]       manage the user/chat allowlist
+#   ./scripts/daemon.sh settings [show|edit]   show or edit settings.json
+#
+# config options:
+#   --adduser <id>    allowlist a user AND the same id as a chat (covers DMs)
+#   --deluser <id>    remove a user from both lists
+#   --addchat <id>    allowlist a group/channel chat id
+#   --delchat <id>    remove a chat id
+#   --list            show the allowlist
 #
 # Details:
-#   - Runs bin/telegram-pc-remote from its own directory (the Go app reads .env
-#     itself). When installed, that is ~/.local/share/telegram-remote.
-#   - PID file: .run/telegram-pc-remote.pid ; log file: bot.log (both git-ignored).
-#   - Refuses to start without TELEGRAM_BOT_TOKEN (env or .env) or without the binary.
-#   - config edits data/whitelist.json atomically (backup kept at .bak, mode 600)
-#     and reloads the running bot automatically (SIGHUP).
+#   - Runs bin/opencode-telegram from its own directory (the Go app reads .env
+#     itself). When installed, that is ~/.local/share/opencode-telegram.
+#   - PID file: .run/opencode-telegram.pid ; log: opencode-telegram.log.
+#   - Refuses to start without TELEGRAM_BOT_TOKEN (env or .env).
+#   - config edits data/allowlist.json atomically (backup .bak, mode 600) and
+#     reloads the running daemon with SIGHUP.
 #
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-BIN="$ROOT/bin/telegram-pc-remote"
-PIDFILE="$ROOT/.run/telegram-pc-remote.pid"
-LOGFILE="$ROOT/bot.log"
+BIN="$ROOT/bin/opencode-telegram"
+PIDFILE="$ROOT/.run/opencode-telegram.pid"
+LOGFILE="$ROOT/opencode-telegram.log"
 
 fail() { echo "error: $*" >&2; exit 1; }
 
 pid_alive() { [[ -n "${1:-}" ]] && kill -0 "$1" 2>/dev/null; }
 
+# running_pids prints every live daemon process for this install. pgrep is
+# used instead of trusting the PID file, so duplicate or stale starts are
+# detected and cleaned up.
+running_pids() {
+  pgrep -x -f "$BIN" 2>/dev/null || true
+}
+
 current_pid() {
+  local pids
+  pids="$(running_pids)"
+  if [[ -n "$pids" ]]; then
+    printf '%s' "$(printf '%s\n' "$pids" | head -n1)"
+    return 0
+  fi
+  # Fall back to the PID file for compatibility with older start scripts.
   [[ -f "$PIDFILE" ]] || return 1
   local pid
   pid="$(tr -d '[:space:]' < "$PIDFILE" 2>/dev/null || true)"
@@ -61,7 +78,7 @@ ensure_built() {
   if [[ ! -x "$BIN" ]]; then
     [[ -f "$ROOT/go.mod" ]] || fail "binary not found at $BIN (reinstall with ./install.sh)"
     echo "binary not found, building..."
-    (cd "$ROOT" && go build -o bin/telegram-pc-remote .) \
+    (cd "$ROOT" && go build -o bin/opencode-telegram .) \
       || fail "build failed (run ./install.sh first)"
   fi
 }
@@ -70,11 +87,13 @@ cmd_start() {
   local foreground=false
   [[ "${1:-}" == "--foreground" ]] && foreground=true
 
-  if pid=$(current_pid); then
-    echo "already running (pid $pid)"
+  local pids
+  pids="$(running_pids)"
+  if [[ -n "$pids" ]]; then
+    echo "$(printf '%s\n' "$pids" | head -n1)" > "$PIDFILE"
+    echo "already running (pid $(printf '%s' "$pids" | tr '\n' ' '))"
     return 0
   fi
-  # Drop a stale pid file left by a crashed process.
   [[ -f "$PIDFILE" ]] && rm -f "$PIDFILE"
 
   ensure_built
@@ -87,11 +106,14 @@ cmd_start() {
 
   mkdir -p "$(dirname "$PIDFILE")" "$(dirname "$LOGFILE")"
   touch "$LOGFILE"
-  cd "$ROOT" && nohup "$BIN" >>"$LOGFILE" 2>&1 &
+  cd "$ROOT"
+  nohup "$BIN" >>"$LOGFILE" 2>&1 &
   echo "$!" > "$PIDFILE"
   sleep 1
-  if pid=$(current_pid); then
-    echo "started (pid $pid, log: $LOGFILE)"
+  pids="$(running_pids)"
+  if [[ -n "$pids" ]]; then
+    echo "$(printf '%s\n' "$pids" | head -n1)" > "$PIDFILE"
+    echo "started (pid $(printf '%s' "$pids" | tr '\n' ' '), log: $LOGFILE)"
   else
     rm -f "$PIDFILE"
     fail "failed to start — check $LOGFILE"
@@ -99,35 +121,45 @@ cmd_start() {
 }
 
 cmd_stop() {
-  local pid
-  if ! pid=$(current_pid); then
+  local pids pid p alive
+  pids="$(running_pids)"
+  if [[ -z "$pids" ]] && pid=$(current_pid); then
+    pids="$pid"
+  fi
+  if [[ -z "$pids" ]]; then
     [[ -f "$PIDFILE" ]] && rm -f "$PIDFILE"
     echo "not running"
     return 0
   fi
-  echo -n "stopping (pid $pid)..."
-  kill "$pid" 2>/dev/null || true
+  echo -n "stopping (pid $(printf '%s' "$pids" | tr '\n' ' '))..."
+  for p in $pids; do kill "$p" 2>/dev/null || true; done
   for _ in $(seq 1 50); do
-    pid_alive "$pid" || break
+    alive=false
+    for p in $pids; do
+      if pid_alive "$p"; then alive=true; break; fi
+    done
+    $alive || break
     sleep 0.2
     echo -n "."
   done
-  if pid_alive "$pid"; then
-    echo -n " (forcing)"
-    kill -9 "$pid" 2>/dev/null || true
-    sleep 0.5
-  fi
+  for p in $pids; do
+    if pid_alive "$p"; then
+      echo -n " (forcing)"
+      kill -9 "$p" 2>/dev/null || true
+    fi
+  done
+  sleep 0.5
   rm -f "$PIDFILE"
-  if pid_alive "$pid"; then
-    fail "could not stop pid $pid"
-  fi
+  for p in $pids; do pid_alive "$p" && fail "could not stop pid $p"; done
   echo " stopped"
 }
 
 cmd_status() {
-  local pid
-  if pid=$(current_pid); then
-    echo "running (pid $pid, log: $LOGFILE)"
+  local pids
+  pids="$(running_pids)"
+  if [[ -n "$pids" ]]; then
+    echo "$(printf '%s\n' "$pids" | head -n1)" > "$PIDFILE"
+    echo "running (pid $(printf '%s' "$pids" | tr '\n' ' '), log: $LOGFILE)"
   else
     echo "not running"
     return 1
@@ -139,30 +171,26 @@ cmd_logs() {
   if [[ "${1:-}" == "-f" ]]; then
     tail -f "$LOGFILE"
   else
-    tail -n 50 "$LOGFILE"
+    tail -n 80 "$LOGFILE"
   fi
 }
 
 cmd_reload() {
-  local pid
-  pid=$(current_pid) || fail "not running — nothing to reload"
-  kill -HUP "$pid"
-  echo "reloaded (SIGHUP sent to pid $pid)"
+  local pids p
+  pids="$(running_pids)"
+  [[ -n "$pids" ]] || fail "not running — nothing to reload"
+  for p in $pids; do kill -HUP "$p" 2>/dev/null || true; done
+  echo "reloaded (SIGHUP sent to pid $(printf '%s' "$pids" | tr '\n' ' '))"
 }
 
-# --- whitelist (config) -------------------------------------------------------
-# The allowlist requires BOTH the sender AND the chat to be listed. In a
-# private chat with the bot both IDs are equal, so --adduser/--deluser manage
-# the id in both lists; --addchat/--delchat handle group/channel chats whose
-# chat id differs. DATA_DIR is honored (relative paths resolve from $ROOT).
-
+# --- allowlist ---------------------------------------------------------------
 wl_file() {
   local d="${DATA_DIR:-data}"
   [[ "$d" = /* ]] || d="$ROOT/$d"
-  printf '%s/whitelist.json' "$d"
+  printf '%s/allowlist.json' "$d"
 }
 
-wl_validate() { # $1 = file; mirrors internal/whitelist (ids: non-zero integers)
+wl_validate() {
   jq -e '(.users | type == "array") and (.chats | type == "array")
     and (all(.users[]; type == "number" and . != 0 and floor == .))
     and (all(.chats[]; type == "number" and . != 0 and floor == .))' "$1" >/dev/null
@@ -175,7 +203,7 @@ wl_ensure() {
     mkdir -p "$(dirname "$f")"
     cat > "$f" <<'EOF'
 {
-  "note": "Allowlist. Get your numeric user/chat IDs from a bot such as @userinfobot. BOTH lists are enforced: a message is processed only if its sender is in 'users' AND the chat is in 'chats'.",
+  "note": "Allowlist. Both the sending user AND the chat must be listed.",
   "users": [],
   "chats": []
 }
@@ -183,14 +211,13 @@ EOF
     chmod 600 "$f"
     echo "note: created empty $f"
   fi
-  wl_validate "$f" || fail "whitelist file is not valid: $f"
+  wl_validate "$f" || fail "allowlist file is not valid: $f"
 }
 
-# wl_commit: apply a jq filter to the whitelist file atomically (backup .bak).
 wl_commit() {
   local f tmp
   f="$(wl_file)"
-  tmp="$(mktemp "$(dirname "$f")/.whitelist.XXXXXX.json")"
+  tmp="$(mktemp "$(dirname "$f")/.allowlist.XXXXXX.json")"
   trap 'rm -f "$tmp"' EXIT
   jq "$@" "$f" > "$tmp" || fail "jq could not apply the change (file left untouched)"
   wl_validate "$tmp" || fail "the resulting file failed validation (file left untouched)"
@@ -203,13 +230,13 @@ wl_commit() {
 
 wl_valid_id() { [[ "${1:-}" =~ ^-?[1-9][0-9]*$ ]]; }
 
-wl_present() { # $1 = id, $2 = list name (users|chats)
+wl_present() {
   local f
   f="$(wl_file)"
   jq -e --argjson id "$1" --arg list "$2" '(.[$list] // []) | index($id) != null' "$f" >/dev/null
 }
 
-wl_adduser() { # $1 = id → both lists (covers DMs where user id == chat id)
+wl_adduser() {
   wl_valid_id "$1" || fail "user id must be a non-zero integer (got '${1:-}')"
   wl_ensure
   if wl_present "$1" users && wl_present "$1" chats; then
@@ -222,20 +249,16 @@ wl_adduser() { # $1 = id → both lists (covers DMs where user id == chat id)
   echo "ok: user $1 allowlisted (users + chats)"
 }
 
-wl_deluser() { # $1 = id → both lists
+wl_deluser() {
   wl_valid_id "$1" || fail "user id must be a non-zero integer (got '${1:-}')"
   wl_ensure
-  if ! wl_present "$1" users && ! wl_present "$1" chats; then
-    echo "note: user $1 was not allowlisted (nothing to do)"
-    return 0
-  fi
   wl_commit --argjson id "$1" '
     .users |= ((. // []) | map(select(. != $id)))
     | .chats |= ((. // []) | map(select(. != $id)))'
   echo "ok: user $1 removed from the allowlist (users + chats)"
 }
 
-wl_addchat() { # $1 = chat id → chats list only
+wl_addchat() {
   wl_valid_id "$1" || fail "chat id must be a non-zero integer (got '${1:-}')"
   wl_ensure
   if wl_present "$1" chats; then
@@ -246,13 +269,9 @@ wl_addchat() { # $1 = chat id → chats list only
   echo "ok: chat $1 allowlisted"
 }
 
-wl_delchat() { # $1 = chat id → chats list only
+wl_delchat() {
   wl_valid_id "$1" || fail "chat id must be a non-zero integer (got '${1:-}')"
   wl_ensure
-  if ! wl_present "$1" chats; then
-    echo "note: chat $1 was not allowlisted (nothing to do)"
-    return 0
-  fi
   wl_commit --argjson id "$1" '.chats |= ((. // []) | map(select(. != $id)))'
   echo "ok: chat $1 removed from the allowlist"
 }
@@ -260,8 +279,8 @@ wl_delchat() { # $1 = chat id → chats list only
 wl_list() {
   local f
   f="$(wl_file)"
-  [[ -f "$f" ]] || fail "whitelist file not found: $f (run ./install.sh first)"
-  wl_validate "$f" || fail "whitelist file is not valid: $f"
+  [[ -f "$f" ]] || fail "allowlist file not found: $f (run ./install.sh first)"
+  wl_validate "$f" || fail "allowlist file is not valid: $f"
   jq -r '"users (\(.users | length)): \([.users[] | tostring] | join(", "))",
           "chats (\(.chats | length)): \([.chats[] | tostring] | join(", "))"' "$f"
 }
@@ -287,11 +306,32 @@ cmd_config() {
   if $dirty; then
     local pid
     if pid=$(current_pid); then
-      kill -HUP "$pid" 2>/dev/null && echo "note: running bot (pid $pid) reloaded"
+      kill -HUP "$pid" 2>/dev/null && echo "note: running daemon (pid $pid) reloaded"
     else
-      echo "note: bot not running — changes apply on next start"
+      echo "note: daemon not running — changes apply on next start"
     fi
   fi
+}
+
+settings_file() {
+  local d="${DATA_DIR:-data}"
+  [[ "$d" = /* ]] || d="$ROOT/$d"
+  printf '%s/settings.json' "$d"
+}
+
+cmd_settings() {
+  local f
+  f="$(settings_file)"
+  [[ -f "$f" ]] || fail "settings file not found: $f (run ./install.sh first)"
+  case "${1:-show}" in
+    show|"") jq . "$f" ;;
+    edit)
+      "${EDITOR:-vi}" "$f"
+      local pid
+      if pid=$(current_pid); then kill -HUP "$pid" 2>/dev/null || true; fi
+      ;;
+    *) fail "usage: settings [show|edit]" ;;
+  esac
 }
 
 usage() {
@@ -308,7 +348,9 @@ case "$cmd" in
   status)  cmd_status ;;
   logs)    cmd_logs "${1:-}" ;;
   reload)  cmd_reload ;;
+  check)   ensure_built; has_token || fail "TELEGRAM_BOT_TOKEN is not set"; cd "$ROOT" && "$BIN" --check ;;
   config)  cmd_config "$@" ;;
+  settings) cmd_settings "${1:-show}" ;;
   help|-h|--help|"") usage ;;
-  *) fail "unknown command '$cmd' (try: start|stop|restart|status|logs|reload|run|config)" ;;
+  *) fail "unknown command '$cmd' (try: start|stop|restart|status|logs|reload|run|check|config|settings)" ;;
 esac

@@ -1,0 +1,19 @@
+{
+  "notifications": {
+    "enabled": false,
+    "session_done": true,
+    "session_failed": true,
+    "session_interrupted": true,
+    "question_asked": true,
+    "permission_asked": true,
+    "retry": false,
+    "include_child_sessions": false,
+    "include_last_message": true,
+    "include_directory": true,
+    "notify_chats": []
+  },
+  "security": {
+    "allow_custom_form_answers": false,
+    "allow_new_messages": false
+  }
+}

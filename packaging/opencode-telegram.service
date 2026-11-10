@@ -1,0 +1,24 @@
+[Unit]
+Description=OpenCode Telegram notifications daemon
+Documentation=https://github.com/Kevin-Ramirez127/opencode-tools
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/opencode-telegram
+EnvironmentFile=%h/.local/share/opencode-telegram/.env
+ExecStart=%h/.local/share/opencode-telegram/bin/opencode-telegram
+Restart=on-failure
+RestartSec=5s
+# Keep logs in the user journal; the wrapper also supports a file log.
+StandardOutput=journal
+StandardError=journal
+# Hardening that does not interfere with the local OpenCode API.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=%h/.local/share/opencode-telegram
+
+[Install]
+WantedBy=default.target

@@ -1,38 +1,86 @@
-// telegram-pc-remote is a Telegram bot that exposes configurable action
-// buttons for remote-controlling the host PC.
+// opencode-telegram is a Telegram daemon for OpenCode.
+//
+// It subscribes to OpenCode's live event stream for every session and
+// notifies allowlisted Telegram chats when a session finishes, fails, asks a
+// question, or requests a permission. When explicitly enabled in the
+// OpenCode plugin, it can relay typed answers and new prompts back to
+// OpenCode.
 //
 // Usage:
 //
-//	TELEGRAM_BOT_TOKEN=... go run .
+//	TELEGRAM_BOT_TOKEN=... opencode-telegram
 //
 // Security posture (see README.md):
-//   - allowlist for users AND chats (fail closed),
-//   - at most one message processed per chat per second (extras ignored),
-//   - pre-approved commands only, with timeouts and locked-down env,
+//   - user AND chat allowlist, fail closed;
+//   - notifications disabled by default;
+//   - arbitrary answers and new prompts disabled by default;
+//   - one update per chat per second;
 //   - no secret is ever logged.
 package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
-	"telegram-pc-remote/internal/config"
-	"telegram-pc-remote/internal/ratelimit"
-	"telegram-pc-remote/internal/store"
-	"telegram-pc-remote/internal/whitelist"
+	"opencode-telegram/internal/app"
+	"opencode-telegram/internal/config"
+	"opencode-telegram/internal/occlient"
+	"opencode-telegram/internal/settings"
+	"opencode-telegram/internal/whitelist"
 )
 
+// version is set at build time with -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
+	var (
+		showVersion = flag.Bool("version", false, "print version and exit")
+		check       = flag.Bool("check", false, "validate configuration and connectivity, then exit")
+	)
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("opencode-telegram " + version)
+		return
+	}
+
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("config: %v", err)
+	}
+	cfg.Version = version
+
+	// Discover the OpenCode background service when explicit values are not
+	// supplied. This is best-effort: the daemon keeps retrying while it runs.
+	if cfg.OpenCodeURL == "" || cfg.OpenCodePassword == "" {
+		if svc, ok := occlient.DiscoverService(); ok {
+			if cfg.OpenCodeURL == "" {
+				cfg.OpenCodeURL = svc.URL
+			}
+			if cfg.OpenCodePassword == "" {
+				cfg.OpenCodePassword = svc.Password
+			}
+			log.Printf("using OpenCode service %s (version %s)", svc.URL, svc.Version)
+		} else if cfg.OpenCodeURL == "" {
+			log.Print("OpenCode service not found yet; will keep discovering")
+		}
+	}
+
+	oc := occlient.New(cfg.OpenCodeURL, cfg.OpenCodePassword, cfg.HTTPTimeout)
+
+	if *check {
+		checkOnly(cfg, oc)
+		return
 	}
 
 	bot, err := tgbotapi.NewBotAPI(cfg.Token)
@@ -41,51 +89,59 @@ func main() {
 	}
 	log.Printf("authenticated as @%s", bot.Self.UserName)
 
-	st, err := store.New(cfg.CommandsFile, cfg.CommandsDir)
+	wl, err := whitelist.New(cfg.AllowlistFile)
 	if err != nil {
-		log.Fatalf("commands store: %v", err)
+		log.Printf("allowlist: %v (deny-all mode until fixed)", err)
 	}
-	wl, err := whitelist.New(cfg.WhitelistFile)
+	st, err := settings.Open(cfg.SettingsFile)
 	if err != nil {
-		log.Fatalf("whitelist: %v", err)
+		log.Fatalf("settings: %v", err)
 	}
+	current := st.Get()
 
-	s := &service{
-		bot:       bot,
-		cfg:       cfg,
-		store:     st,
-		whitelist: wl,
-		limit:     ratelimit.New(),
-		sem:       make(chan struct{}, cfg.MaxConcurrent),
-	}
+	a := app.New(cfg, bot, oc, wl, st, version)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	hup := make(chan os.Signal, 1)
 	signal.Notify(hup, syscall.SIGHUP)
 
-	go s.refreshLoop(ctx, hup)
-	go s.pruneLoop(ctx)
+	log.Printf("config: %d allowlisted users, %d allowlisted chats, notifications=%s, custom answers=%s, new messages=%s",
+		wl.LenUsers(), wl.LenChats(), onOff(current.Notifications.Enabled),
+		onOff(current.Security.AllowCustomFormAnswers), onOff(current.Security.AllowNewMessages))
 
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
-	u.AllowedUpdates = []string{"message", "callback_query"}
-	updates := bot.GetUpdatesChan(u)
+	a.Start(ctx, hup)
+	<-ctx.Done()
+	log.Print("shutting down")
+}
 
-	log.Printf("started: %d commands, %d whitelisted users, %d whitelisted chats",
-		st.Count(), wl.LenUsers(), wl.LenChats())
-
-	for {
-		select {
-		case <-ctx.Done():
-			log.Print("shutting down")
-			return
-		case upd, ok := <-updates:
-			if !ok {
-				log.Print("update channel closed")
-				return
-			}
-			s.handle(upd)
+func checkOnly(cfg *config.Config, oc *occlient.Client) {
+	fmt.Printf("opencode-telegram %s\n", version)
+	fmt.Printf("data dir:      %s\n", cfg.DataDir)
+	fmt.Printf("plugin API:    http://%s\n", cfg.ListenAddr)
+	if cfg.OpenCodeURL == "" {
+		fmt.Println("opencode:      not discovered (start OpenCode or set OPENCODE_URL)")
+	} else {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		info, err := oc.Info(ctx)
+		if err != nil {
+			fmt.Printf("opencode:      %s (error: %v)\n", cfg.OpenCodeURL, err)
+		} else {
+			fmt.Printf("opencode:      %s (version %v)\n", cfg.OpenCodeURL, info["version"])
 		}
 	}
+	if _, err := os.Stat(cfg.AllowlistFile); err != nil {
+		fmt.Printf("allowlist:     %s (error: %v)\n", cfg.AllowlistFile, err)
+	} else {
+		fmt.Printf("allowlist:     %s\n", cfg.AllowlistFile)
+	}
+	fmt.Printf("settings:      %s\n", cfg.SettingsFile)
+}
+
+func onOff(v bool) string {
+	if v {
+		return "on"
+	}
+	return "off"
 }

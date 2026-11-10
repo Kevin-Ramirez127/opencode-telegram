@@ -1,9 +1,8 @@
 // Package safeio provides atomic, permission-restricted file writes.
 //
 // Every write goes through a temp file in the same directory, is fsynced,
-// chmod'd to 0600, and then renamed into place. Readers (including the bot's
-// background reloader and a concurrently running manage_commands.sh) can only
-// ever observe either the old or the new content, never a partial write.
+// chmod'd to 0600, and then renamed into place. Readers can only ever observe
+// either the old or the new content, never a partial write.
 package safeio
 
 import (

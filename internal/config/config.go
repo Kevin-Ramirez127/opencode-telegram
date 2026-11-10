@@ -1,10 +1,9 @@
-// Package config loads all runtime configuration for the bot.
+// Package config loads runtime configuration for the OpenCode Telegram daemon.
 //
-// Security notes:
-//   - The bot token is read from the TELEGRAM_BOT_TOKEN environment variable
-//     (or an optional .env file) and is never logged.
-//   - An optional .env file is supported for local development convenience,
-//     but it MUST never be committed and should be chmod 600.
+// Secrets come from the environment or an optional .env file and are never
+// logged. The Telegram bot token is mandatory; the OpenCode API endpoint and
+// password may be discovered from the background service registration when
+// they are not supplied explicitly.
 package config
 
 import (
@@ -15,71 +14,110 @@ import (
 	"time"
 )
 
+// Config is the fully-resolved daemon configuration.
 type Config struct {
+	// Token is the Telegram bot token from @BotFather.
 	Token string
-	// DataDir is the absolute path holding commands.json and whitelist.json.
-	DataDir       string
-	CommandsFile  string
-	WhitelistFile string
-	// CommandsDir is the absolute path holding the user-authored .sh scripts.
-	CommandsDir string
 
-	// ReloadEvery is how often the command and whitelist files are checked
-	// for external changes (mtime/size based).
+	// OpenCodeURL and OpenCodePassword point at the OpenCode HTTP API.
+	// When either is empty, the daemon discovers the local background
+	// service registration at startup and when reconnecting.
+	OpenCodeURL      string
+	OpenCodePassword string
+	// OpenCodeURLExplicit / OpenCodePasswordExplicit record whether those
+	// values came from the environment (and must not be replaced by service
+	// discovery).
+	OpenCodeURLExplicit      bool
+	OpenCodePasswordExplicit bool
+
+	// ListenAddr is the loopback address of the local settings API used by
+	// the OpenCode plugin.
+	ListenAddr string
+	// PluginToken optionally protects the settings API with a bearer token.
+	PluginToken string
+
+	// DataDir holds the allowlist and settings files.
+	DataDir       string
+	AllowlistFile string
+	SettingsFile  string
+
+	// ReloadEvery controls how often the allowlist and settings files are
+	// checked for external edits.
 	ReloadEvery time.Duration
-	// MaxConcurrent caps how many updates are processed at the same time,
-	// which bounds resource usage from slow scripts.
-	MaxConcurrent int
-	// MaxCommandDuration is a hard cap for a single command's execution,
-	// independent of each command's own timeout_sec.
-	MaxCommandDuration time.Duration
+	// HTTPTimeout bounds a single OpenCode API request.
+	HTTPTimeout time.Duration
+
+	// Version is injected by main for /health and /status.
+	Version string
 }
 
+// Load reads the environment (plus an optional .env) and returns the config.
 func Load() (*Config, error) {
 	if err := loadDotEnv(); err != nil {
 		return nil, fmt.Errorf("loading .env: %w", err)
 	}
 
-	token := os.Getenv("TELEGRAM_BOT_TOKEN")
+	token := strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN"))
 	if token == "" {
 		return nil, fmt.Errorf("TELEGRAM_BOT_TOKEN is not set (get one from @BotFather)")
 	}
 
-	dataDir := os.Getenv("DATA_DIR")
-	if dataDir == "" {
-		dataDir = "data"
-	}
+	dataDir := env("DATA_DIR", "data")
 	abs, err := filepath.Abs(dataDir)
 	if err != nil {
 		return nil, fmt.Errorf("bad DATA_DIR %q: %w", dataDir, err)
 	}
 
-	commandsDir := os.Getenv("COMMANDS_DIR")
-	if commandsDir == "" {
-		commandsDir = "commands"
-	}
-	cmdsAbs, err := filepath.Abs(commandsDir)
-	if err != nil {
-		return nil, fmt.Errorf("bad COMMANDS_DIR %q: %w", commandsDir, err)
+	listen := env("LISTEN_ADDR", "127.0.0.1:8787")
+	if !strings.Contains(listen, ":") {
+		return nil, fmt.Errorf("LISTEN_ADDR %q must be host:port", listen)
 	}
 
-	reloadEvery := envDuration("BOT_RELOAD_SECONDS", 5*time.Second)
-	maxConcurrent := envInt("BOT_MAX_CONCURRENT", 4)
-	if maxConcurrent < 1 {
-		return nil, fmt.Errorf("BOT_MAX_CONCURRENT must be >= 1")
+	reloadEvery, err := envDuration("RELOAD_SECONDS", 5*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("RELOAD_SECONDS: %w", err)
 	}
-	maxDuration := envDuration("BOT_MAX_COMMAND_SECONDS", 10*time.Minute)
+	httpTimeout, err := envDuration("HTTP_TIMEOUT_SECONDS", 20*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP_TIMEOUT_SECONDS: %w", err)
+	}
 
 	return &Config{
-		Token:              token,
-		DataDir:            abs,
-		CommandsFile:       filepath.Join(abs, "commands.json"),
-		WhitelistFile:      filepath.Join(abs, "whitelist.json"),
-		CommandsDir:        cmdsAbs,
-		ReloadEvery:        reloadEvery,
-		MaxConcurrent:      maxConcurrent,
-		MaxCommandDuration: maxDuration,
+		Token:                    token,
+		OpenCodeURL:              strings.TrimRight(strings.TrimSpace(os.Getenv("OPENCODE_URL")), "/"),
+		OpenCodePassword:         strings.TrimSpace(os.Getenv("OPENCODE_PASSWORD")),
+		OpenCodeURLExplicit:      strings.TrimSpace(os.Getenv("OPENCODE_URL")) != "",
+		OpenCodePasswordExplicit: strings.TrimSpace(os.Getenv("OPENCODE_PASSWORD")) != "",
+		ListenAddr:               listen,
+		PluginToken:              strings.TrimSpace(os.Getenv("PLUGIN_TOKEN")),
+		DataDir:                  abs,
+		AllowlistFile:            filepath.Join(abs, "allowlist.json"),
+		SettingsFile:             filepath.Join(abs, "settings.json"),
+		ReloadEvery:              reloadEvery,
+		HTTPTimeout:              httpTimeout,
 	}, nil
+}
+
+func env(name, def string) string {
+	if v := strings.TrimSpace(os.Getenv(name)); v != "" {
+		return v
+	}
+	return def
+}
+
+func envDuration(name string, def time.Duration) (time.Duration, error) {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, err
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("must be positive")
+	}
+	return d, nil
 }
 
 // loadDotEnv applies an optional .env file. Existing environment variables
@@ -103,34 +141,11 @@ func loadDotEnv() error {
 			continue
 		}
 		key = strings.TrimSpace(key)
-		value = strings.TrimSpace(strings.Trim(value, `"'`))
+		value = strings.TrimSpace(value)
+		value = strings.Trim(value, `"'`)
 		if key != "" && os.Getenv(key) == "" {
 			_ = os.Setenv(key, value)
 		}
 	}
 	return nil
-}
-
-func envInt(name string, def int) int {
-	v := os.Getenv(name)
-	if v == "" {
-		return def
-	}
-	n := 0
-	if _, err := fmt.Sscanf(v, "%d", &n); err != nil {
-		return def
-	}
-	return n
-}
-
-func envDuration(name string, def time.Duration) time.Duration {
-	v := os.Getenv(name)
-	if v == "" {
-		return def
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		return def
-	}
-	return d
 }
