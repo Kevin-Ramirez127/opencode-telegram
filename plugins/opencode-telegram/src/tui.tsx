@@ -107,7 +107,14 @@ async function request(
     }
   }
   if (!response.ok) {
-    throw new Error(typeof data.error === "string" ? data.error : `HTTP ${response.status}`)
+    const message = typeof data.error === "string" ? data.error : `HTTP ${response.status}`
+    if (message.includes("unknown field")) {
+      throw new Error(
+        `${message}. The running daemon is older than this plugin; rebuild and restart it ` +
+          `(make build && opencode-telegram restart).`,
+      )
+    }
+    throw new Error(message)
   }
   return data
 }
