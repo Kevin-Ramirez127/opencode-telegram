@@ -61,12 +61,45 @@ func (f *fakeTelegram) allText() string {
 	return strings.Join(f.texts, "\n---\n")
 }
 
+func (f *fakeTelegram) allTexts() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.texts...)
+}
+
 type fakeOpenCode struct {
 	mu            sync.Mutex
 	formAnswer    map[string]any
 	permission    string
 	sessionTitle  string
 	lastAssistant string
+	lastParts     []string
+	reasoning     string
+	generated     string
+	summaryPrompt string
+	prompt        string
+}
+
+func (f *fakeOpenCode) message() map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	texts := f.lastParts
+	if len(texts) == 0 {
+		texts = []string{f.lastAssistant}
+	}
+	content := make([]any, 0, len(texts)+1)
+	if f.reasoning != "" {
+		content = append(content, map[string]any{"type": "reasoning", "text": f.reasoning})
+	}
+	for _, text := range texts {
+		content = append(content, map[string]any{"type": "text", "text": text})
+	}
+	return map[string]any{
+		"id":      "msg_1",
+		"type":    "assistant",
+		"time":    map[string]any{"created": 2},
+		"content": content,
+	}
 }
 
 func (f *fakeOpenCode) handler(w http.ResponseWriter, r *http.Request) {
@@ -80,15 +113,28 @@ func (f *fakeOpenCode) handler(w http.ResponseWriter, r *http.Request) {
 			"time":     map[string]any{"created": 1, "updated": 61001},
 		}})
 	case r.Method == http.MethodGet && r.URL.Path == "/api/session/ses_1/message":
-		writeFakeJSON(w, map[string]any{"data": []any{map[string]any{
-			"id":   "msg_1",
-			"type": "assistant",
-			"time": map[string]any{"created": 2},
-			"content": []any{map[string]any{
-				"type": "text",
-				"text": f.lastAssistant,
-			}},
-		}}})
+		writeFakeJSON(w, map[string]any{"data": []any{f.message()}})
+	case r.Method == http.MethodGet && r.URL.Path == "/api/session/ses_1/message/msg_1":
+		writeFakeJSON(w, map[string]any{"data": f.message()})
+	case r.Method == http.MethodPost && r.URL.Path == "/api/session/ses_1/generate":
+		var body struct {
+			Prompt string `json:"prompt"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.mu.Lock()
+		f.summaryPrompt = body.Prompt
+		text := f.generated
+		f.mu.Unlock()
+		writeFakeJSON(w, map[string]any{"data": map[string]any{"text": text}})
+	case r.Method == http.MethodPost && r.URL.Path == "/api/session/ses_1/prompt":
+		var body struct {
+			Text string `json:"text"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.mu.Lock()
+		f.prompt = body.Text
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/session/ses_1/form/"):
 		var body struct {
 			Answer map[string]any `json:"answer"`
@@ -213,15 +259,16 @@ func TestSessionDoneNotificationUTF8(t *testing.T) {
 		Type: "session.execution.succeeded",
 		Data: []byte(`{"sessionID":"ses_1"}`),
 	})
-	text := ftg.lastText()
-	if !utf8.ValidString(text) {
-		t.Fatalf("notification is not valid UTF-8: %q", text)
+	if !strings.Contains(ftg.allText(), "session finished") {
+		t.Fatalf("notification missing heading:\n%s", ftg.allText())
 	}
-	if !strings.Contains(text, "session finished") {
-		t.Fatalf("notification missing heading:\n%s", text)
-	}
-	if len(text) > maxTelegramText {
-		t.Fatalf("notification length = %d, want <= %d", len(text), maxTelegramText)
+	for _, text := range ftg.allTexts() {
+		if !utf8.ValidString(text) {
+			t.Fatalf("notification is not valid UTF-8: %q", text)
+		}
+		if len(text) > maxTelegramText {
+			t.Fatalf("notification length = %d, want <= %d", len(text), maxTelegramText)
+		}
 	}
 }
 
@@ -300,6 +347,163 @@ func TestDoneNotificationSuppressedWhileQuestionPending(t *testing.T) {
 	a.handleEvent(occlient.Event{Type: "session.execution.succeeded", Data: []byte(`{"sessionID":"ses_1"}`)})
 	if !strings.Contains(ftg.allText(), "session finished") {
 		t.Fatal("expected a session-finished notification after the question settled")
+	}
+}
+
+func TestLongMessageSplitsTextBlocks(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	blockA := strings.Repeat("a", 3000)
+	blockB := strings.Repeat("b", 3000)
+	foc.lastParts = []string{blockA, blockB}
+
+	a.handleEvent(occlient.Event{
+		Type: "session.execution.succeeded",
+		Data: []byte(`{"sessionID":"ses_1"}`),
+	})
+
+	all := ftg.allText()
+	if !strings.Contains(all, blockA) || !strings.Contains(all, blockB) {
+		t.Fatalf("split notification lost a text block:\n%s", all)
+	}
+	for _, text := range ftg.allTexts() {
+		if len(text) > maxTelegramText {
+			t.Fatalf("message length = %d, want <= %d", len(text), maxTelegramText)
+		}
+	}
+}
+
+func TestLongMessageSummaryButton(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	mode := "summary"
+	if _, err := a.settings.Patch(settings.Patch{Notifications: &settings.NotificationsPatch{
+		LongMessageMode: &mode,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	foc.lastParts = []string{strings.Repeat("x", 5000)}
+	foc.generated = "short summary"
+
+	a.handleEvent(occlient.Event{
+		Type: "session.execution.succeeded",
+		Data: []byte(`{"sessionID":"ses_1"}`),
+	})
+	token, _ := findAction(t, a, "summarize_output", "")
+	a.handleCallback(123, callbackData(token))
+
+	if !strings.Contains(ftg.allText(), "short summary") {
+		t.Fatalf("summary was not delivered:\n%s", ftg.allText())
+	}
+	foc.mu.Lock()
+	prompt := foc.summaryPrompt
+	foc.mu.Unlock()
+	if !strings.Contains(prompt, "xxxxx") {
+		t.Fatalf("summary prompt did not contain the output: %q", prompt)
+	}
+}
+
+func TestSummarizeOutputButtonOnNormalMessage(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	foc.lastAssistant = "short message"
+	foc.generated = "short summary"
+
+	a.handleEvent(occlient.Event{
+		Type: "session.execution.succeeded",
+		Data: []byte(`{"sessionID":"ses_1"}`),
+	})
+	token, _ := findAction(t, a, "summarize_output", "")
+	a.handleCallback(123, callbackData(token))
+
+	if !strings.Contains(ftg.allText(), "short message") || !strings.Contains(ftg.allText(), "short summary") {
+		t.Fatalf("missing message or summary:\n%s", ftg.allText())
+	}
+}
+
+func TestShowThinkingButton(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	foc.reasoning = "raw secret reasoning"
+
+	a.handleEvent(occlient.Event{
+		Type: "session.execution.succeeded",
+		Data: []byte(`{"sessionID":"ses_1"}`),
+	})
+	token, _ := findAction(t, a, "show_thinking", "")
+	a.handleCallback(123, callbackData(token))
+
+	if !strings.Contains(ftg.allText(), "raw secret reasoning") {
+		t.Fatalf("raw thinking was not delivered:\n%s", ftg.allText())
+	}
+}
+
+func TestRawThinkingOffersSummarizeButton(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	foc.reasoning = "raw reasoning to summarize"
+	foc.generated = "summarized thinking"
+
+	a.handleEvent(occlient.Event{
+		Type: "session.execution.succeeded",
+		Data: []byte(`{"sessionID":"ses_1"}`),
+	})
+	showToken, _ := findAction(t, a, "show_thinking", "")
+	a.handleCallback(123, callbackData(showToken))
+	if !strings.Contains(ftg.allText(), "raw reasoning to summarize") {
+		t.Fatalf("raw thinking was not delivered:\n%s", ftg.allText())
+	}
+
+	sumToken, _ := findAction(t, a, "summarize_thinking", "")
+	a.handleCallback(123, callbackData(sumToken))
+	if !strings.Contains(ftg.allText(), "summarized thinking") {
+		t.Fatalf("thinking summary was not delivered:\n%s", ftg.allText())
+	}
+	foc.mu.Lock()
+	prompt := foc.summaryPrompt
+	foc.mu.Unlock()
+	if !strings.Contains(prompt, "raw reasoning to summarize") {
+		t.Fatalf("summary prompt did not contain the reasoning: %q", prompt)
+	}
+}
+
+func TestSummarizeThinkingCanBeDisabled(t *testing.T) {
+	a, _, foc := newIntegrationApp(t)
+	off := false
+	if _, err := a.settings.Patch(settings.Patch{Notifications: &settings.NotificationsPatch{
+		ShowSummarizeThinking: &off,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	foc.reasoning = "raw reasoning"
+
+	a.handleEvent(occlient.Event{
+		Type: "session.execution.succeeded",
+		Data: []byte(`{"sessionID":"ses_1"}`),
+	})
+	showToken, _ := findAction(t, a, "show_thinking", "")
+	a.handleCallback(123, callbackData(showToken))
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, act := range a.actions {
+		if act.Kind == "summarize_thinking" {
+			t.Fatal("summarize thinking action must not be created when disabled")
+		}
+	}
+}
+
+func TestSummaryActionsAreSingleUse(t *testing.T) {
+	a, _, foc := newIntegrationApp(t)
+	foc.generated = "summary"
+
+	a.handleEvent(occlient.Event{
+		Type: "session.execution.succeeded",
+		Data: []byte(`{"sessionID":"ses_1"}`),
+	})
+	token, _ := findAction(t, a, "summarize_output", "")
+	a.handleCallback(123, callbackData(token))
+
+	if a.claimAction(token, 123) {
+		t.Fatal("summary action must be single-use per chat")
+	}
+	if !a.claimAction(token, 456) {
+		t.Fatal("another chat must still be able to use its own button")
 	}
 }
 

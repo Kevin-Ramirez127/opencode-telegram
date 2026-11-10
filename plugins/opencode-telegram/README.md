@@ -12,6 +12,10 @@ adds a `/telegram` slash command and a palette command,
   permissions, retry status;
 - whether to include child/subagent sessions, the last assistant message, and
   the working directory;
+- how oversized responses are delivered: split into one message per text block,
+  or a preview with **Summarize output**;
+- whether raw thinking ends with a **Summarize thinking** button (on by
+  default);
 - security switches for **custom answers** and **new messages** (both off by
   default);
 - send a test notification.

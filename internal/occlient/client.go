@@ -206,15 +206,39 @@ type Message struct {
 	} `json:"time"`
 }
 
+// TextParts returns every non-empty assistant text block in order.
+func (m Message) TextParts() []string {
+	return contentParts(m, "text")
+}
+
+// ReasoningParts returns every non-empty reasoning/thinking block in order.
+func (m Message) ReasoningParts() []string {
+	return contentParts(m, "reasoning")
+}
+
 // FinalText returns the last text part of an assistant message.
 func (m Message) FinalText() string {
-	var parts []string
+	return strings.TrimSpace(strings.Join(m.TextParts(), "\n\n"))
+}
+
+// ReasoningText returns the full raw reasoning of an assistant message.
+func (m Message) ReasoningText() string {
+	return strings.TrimSpace(strings.Join(m.ReasoningParts(), "\n\n"))
+}
+
+// HasReasoning reports whether the message carries reasoning content.
+func (m Message) HasReasoning() bool {
+	return len(m.ReasoningParts()) > 0
+}
+
+func contentParts(m Message, kind string) []string {
+	parts := make([]string, 0, len(m.Content))
 	for _, p := range m.Content {
-		if p.Type == "text" && strings.TrimSpace(p.Text) != "" {
+		if p.Type == kind && strings.TrimSpace(p.Text) != "" {
 			parts = append(parts, p.Text)
 		}
 	}
-	return strings.TrimSpace(strings.Join(parts, "\n\n"))
+	return parts
 }
 
 type FormOption struct {
@@ -335,12 +359,25 @@ func (c *Client) ListMessages(ctx context.Context, sessionID string) ([]Message,
 	return out.Data, err
 }
 
-// LastAssistantText returns the newest assistant text in a session. Asking the
-// server for a descending, assistant-only page avoids downloading the whole
-// transcript just for a notification preview.
-func (c *Client) LastAssistantText(ctx context.Context, sessionID string) (string, error) {
+// GetMessage returns one projected message by ID.
+func (c *Client) GetMessage(ctx context.Context, sessionID, messageID string) (Message, error) {
+	var out struct {
+		Data Message `json:"data"`
+	}
+	path := "/api/session/" + url.PathEscape(sessionID) + "/message/" + url.PathEscape(messageID)
+	err := c.do(ctx, http.MethodGet, path, nil, &out)
+	return out.Data, err
+}
+
+// AssistantMessages returns the newest assistant messages, first one first.
+// Asking the server for a descending, assistant-only page avoids downloading
+// the whole transcript just for a notification preview.
+func (c *Client) AssistantMessages(ctx context.Context, sessionID string, limit int) ([]Message, error) {
+	if limit <= 0 {
+		limit = 20
+	}
 	q := url.Values{}
-	q.Set("limit", "20")
+	q.Set("limit", fmt.Sprintf("%d", limit))
 	q.Set("order", "desc")
 	q.Set("type", "assistant")
 	var out struct {
@@ -348,9 +385,32 @@ func (c *Client) LastAssistantText(ctx context.Context, sessionID string) (strin
 	}
 	path := "/api/session/" + url.PathEscape(sessionID) + "/message?" + q.Encode()
 	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Data, nil
+}
+
+// LastAssistantMessage returns the newest assistant message that has content.
+func (c *Client) LastAssistantMessage(ctx context.Context, sessionID string) (Message, bool, error) {
+	messages, err := c.AssistantMessages(ctx, sessionID, 20)
+	if err != nil {
+		return Message{}, false, err
+	}
+	for _, m := range messages {
+		if len(m.Content) > 0 {
+			return m, true, nil
+		}
+	}
+	return Message{}, false, nil
+}
+
+// LastAssistantText returns the newest assistant text in a session.
+func (c *Client) LastAssistantText(ctx context.Context, sessionID string) (string, error) {
+	messages, err := c.AssistantMessages(ctx, sessionID, 20)
+	if err != nil {
 		return "", err
 	}
-	for _, m := range out.Data {
+	for _, m := range messages {
 		if text := m.FinalText(); text != "" {
 			return text, nil
 		}
@@ -394,6 +454,21 @@ func (c *Client) Prompt(ctx context.Context, sessionID, text string) error {
 		"text":     text,
 		"delivery": "queue",
 	}, nil)
+}
+
+// Generate asks OpenCode for transient text from the session context. It uses
+// the session's configured model and does not add a message to the history.
+func (c *Client) Generate(ctx context.Context, sessionID, prompt string) (string, error) {
+	path := "/api/session/" + url.PathEscape(sessionID) + "/generate"
+	var out struct {
+		Data struct {
+			Text string `json:"text"`
+		} `json:"data"`
+	}
+	if err := c.do(ctx, http.MethodPost, path, map[string]any{"prompt": prompt}, &out); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out.Data.Text), nil
 }
 
 func (c *Client) Interrupt(ctx context.Context, sessionID string) error {

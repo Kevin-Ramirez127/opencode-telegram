@@ -17,6 +17,69 @@ func TestDefaultsAreOff(t *testing.T) {
 	if !d.Notifications.SessionDone || !d.Notifications.QuestionAsked {
 		t.Fatal("individual notification types should default to on")
 	}
+	if d.Notifications.LongMessageMode != "split" {
+		t.Fatalf("long_message_mode = %q", d.Notifications.LongMessageMode)
+	}
+	if !d.Notifications.ShowSummarizeThinking {
+		t.Fatal("show_summarize_thinking must default to on")
+	}
+}
+
+func TestPatchLongMessageAndThinking(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "settings.json")
+	s, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mode := "summary"
+	show := false
+	next, err := s.Patch(Patch{
+		Notifications: &NotificationsPatch{
+			LongMessageMode:       &mode,
+			ShowSummarizeThinking: &show,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Notifications.LongMessageMode != "summary" || next.Notifications.ShowSummarizeThinking {
+		t.Fatalf("patch not applied: %+v", next)
+	}
+}
+
+func TestRejectUnknownLongMessageMode(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "settings.json")
+	s, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := "sometimes"
+	if _, err := s.Patch(Patch{Notifications: &NotificationsPatch{LongMessageMode: &bad}}); err == nil {
+		t.Fatal("unknown long message mode must be rejected")
+	}
+}
+
+func TestOldSettingsEnableSummarizeThinking(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(p, []byte(`{"notifications":{"enabled":true}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.Get().Notifications.ShowSummarizeThinking {
+		t.Fatal("missing show_summarize_thinking must default to on")
+	}
+	if err := os.WriteFile(p, []byte(`{"notifications":{"show_summarize_thinking":false}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if s.Get().Notifications.ShowSummarizeThinking {
+		t.Fatal("explicit false must be honored")
+	}
 }
 
 func TestOpenCreatesFile(t *testing.T) {

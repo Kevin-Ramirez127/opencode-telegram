@@ -105,21 +105,47 @@ func (a *App) notifySession(sessionID, kind, detail string) {
 		fmt.Fprintf(&b, "\nError: %s\n", truncateText(detail, 1200))
 	}
 
-	if n.IncludeLastMessage && kind != "failed" {
-		if text := a.lastAssistantText(sessionID); text != "" {
-			fmt.Fprintf(&b, "\nLast message:\n%s\n", truncateText(text, 1200))
+	header := b.String()
+	assistant, hasAssistant := a.lastAssistantMessage(sessionID)
+	var textParts []string
+	if hasAssistant {
+		textParts = assistant.TextParts()
+	}
+	includeText := n.IncludeLastMessage && kind != "failed" && len(textParts) > 0
+	text := strings.Join(textParts, "\n\n")
+
+	full := header
+	if includeText {
+		full += "\nLast message:\n" + text
+	}
+
+	hasThinking := hasAssistant && assistant.HasReasoning()
+	oversized := len(full) > maxTelegramText
+	markup := a.notificationMarkup(sessionID, assistant.ID, includeText, hasThinking)
+
+	switch {
+	case !oversized:
+		a.broadcast(full, markup)
+	case includeText && n.LongMessageMode == "summary":
+		preview := header + "\nLast message:\n" + truncateText(text, 1200) +
+			"\n\n…This message is too long. Tap \"Summarize output\" for a summary."
+		a.broadcast(truncateText(preview, maxTelegramText), markup)
+	case includeText:
+		// One message per assistant text block, with the action buttons on the
+		// final part.
+		parts := contentMessages(header, textParts)
+		out := make([]outgoingMessage, 0, len(parts))
+		for i, part := range parts {
+			partMarkup := tgbotapi.InlineKeyboardMarkup{}
+			if i == len(parts)-1 {
+				partMarkup = markup
+			}
+			out = append(out, outgoingMessage{Text: part, Markup: partMarkup})
 		}
+		a.broadcastParts(out)
+	default:
+		a.broadcast(truncateText(full, maxTelegramText), markup)
 	}
-
-	var markup tgbotapi.InlineKeyboardMarkup
-	if a.settings.Get().Security.AllowNewMessages {
-		token := a.addAction(action{Kind: "bind_reply", SessionID: sessionID})
-		markup = tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{
-			tgbotapi.NewInlineKeyboardButtonData("Reply to this session", callbackData(token)),
-		})
-	}
-
-	a.broadcast(b.String(), markup)
 	a.finishRun(sessionID, kind, true)
 }
 
@@ -178,17 +204,6 @@ func (a *App) fetchSession(sessionID string) (occlient.Session, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	return a.oc.GetSession(ctx, sessionID)
-}
-
-func (a *App) lastAssistantText(sessionID string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	text, err := a.oc.LastAssistantText(ctx, sessionID)
-	if err != nil {
-		log.Printf("notification: could not read messages for %s: %v", sessionID, err)
-		return ""
-	}
-	return text
 }
 
 func sessionDuration(s occlient.Session) string {

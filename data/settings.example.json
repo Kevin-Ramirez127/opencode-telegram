@@ -10,7 +10,9 @@
     "include_child_sessions": false,
     "include_last_message": true,
     "include_directory": true,
-    "notify_chats": []
+    "notify_chats": [],
+    "long_message_mode": "split",
+    "show_summarize_thinking": true
   },
   "security": {
     "allow_custom_form_answers": false,

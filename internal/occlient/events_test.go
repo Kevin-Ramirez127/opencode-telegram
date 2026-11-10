@@ -33,6 +33,15 @@ func TestFinalTextPicksTextParts(t *testing.T) {
 	if got := m.FinalText(); got != "hello\n\nworld" {
 		t.Fatalf("FinalText = %q", got)
 	}
+	if got := m.ReasoningText(); got != "thinking" {
+		t.Fatalf("ReasoningText = %q", got)
+	}
+	if !m.HasReasoning() {
+		t.Fatal("HasReasoning = false")
+	}
+	if got := len(m.TextParts()); got != 2 {
+		t.Fatalf("TextParts length = %d", got)
+	}
 }
 
 func TestSessionDisplayTitle(t *testing.T) {

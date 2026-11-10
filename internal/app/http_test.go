@@ -93,6 +93,20 @@ func TestSettingsAPIRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSettingsAPIUpdatesDeliveryAndThinking(t *testing.T) {
+	a, srv := testApp(t)
+
+	resp, data := do(t, srv, http.MethodPatch, "/api/plugin/settings",
+		`{"notifications":{"long_message_mode":"summary","show_summarize_thinking":false}}`, true)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH status = %d (%v)", resp.StatusCode, data)
+	}
+	got := a.settings.Get()
+	if got.Notifications.LongMessageMode != "summary" || got.Notifications.ShowSummarizeThinking {
+		t.Fatalf("settings = %+v", got)
+	}
+}
+
 func TestSettingsAPIRejectsUnknownChat(t *testing.T) {
 	_, srv := testApp(t)
 	resp, data := do(t, srv, http.MethodPatch, "/api/plugin/settings",

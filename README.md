@@ -189,7 +189,9 @@ notifications**). It edits `data/settings.json` through the daemon API:
     "include_child_sessions": false,
     "include_last_message": true,
     "include_directory": true,
-    "notify_chats": []
+    "notify_chats": [],
+    "long_message_mode": "split",
+    "show_summarize_thinking": true
   },
   "security": {
     "allow_custom_form_answers": false,
@@ -203,6 +205,38 @@ allowlisted; the API rejects anything else.
 
 `include_child_sessions` is off by default: subagent/child sessions finish
 often and usually should not page you.
+
+### Long messages
+
+Telegram rejects messages over 4096 bytes. `long_message_mode` decides what the
+daemon does when the last assistant message would not fit:
+
+| Value | Behavior |
+|---|---|
+| `split` (default) | Send one message per assistant text block. A single oversized block is split at paragraph/line boundaries. Nothing is silently truncated. |
+| `summary` | If the message is oversized, send a short preview instead of splitting it. The **Summarize output** button is available on every notification with assistant output, regardless of mode. |
+
+### Output and thinking buttons
+
+Notifications that include assistant output get:
+
+- **📄 Summarize output** — asks OpenCode to summarize that exact output and
+  sends the summary. The request uses the session's configured model and does
+  not add a message to the session history.
+
+When the assistant message carries reasoning, notifications also get:
+
+- **🧠 Show thinking** — sends the raw reasoning text. Long reasoning is split
+  the same way as normal text.
+
+The raw-thinking message ends with:
+
+- **📝 Summarize thinking** — asks OpenCode to summarize that exact reasoning
+  block. It is enabled by default and can be turned off with
+  `show_summarize_thinking` in the plugin.
+
+Every button targets the assistant message that produced the notification, and
+is single-use so repeated taps cannot start multiple generations.
 
 ### Security switches
 

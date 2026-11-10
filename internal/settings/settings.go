@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +30,27 @@ type Notifications struct {
 	IncludeLastMessage   bool    `json:"include_last_message"`
 	IncludeDirectory     bool    `json:"include_directory"`
 	NotifyChats          []int64 `json:"notify_chats"`
+
+	// LongMessageMode decides what happens when a notification would exceed
+	// Telegram's 4096-byte limit. "split" sends one message per assistant text
+	// block; "summary" sends a short preview plus the summarize-output button.
+	LongMessageMode string `json:"long_message_mode"`
+	// ShowSummarizeThinking adds a "Summarize thinking" button under the raw
+	// thinking text. It is on by default but can be turned off for long or
+	// sensitive reasoning blocks.
+	ShowSummarizeThinking bool `json:"show_summarize_thinking"`
+}
+
+// UnmarshalJSON keeps show_summarize_thinking enabled when an older settings
+// file does not contain the field, while still honoring an explicit false.
+func (n *Notifications) UnmarshalJSON(data []byte) error {
+	type plain Notifications
+	next := plain{ShowSummarizeThinking: true}
+	if err := json.Unmarshal(data, &next); err != nil {
+		return err
+	}
+	*n = Notifications(next)
+	return nil
 }
 
 // Security controls actions that can inject arbitrary content into OpenCode.
@@ -50,17 +72,19 @@ type Settings struct {
 func Defaults() Settings {
 	return Settings{
 		Notifications: Notifications{
-			Enabled:              false,
-			SessionDone:          true,
-			SessionFailed:        true,
-			SessionInterrupted:   true,
-			QuestionAsked:        true,
-			PermissionAsked:      true,
-			Retry:                false,
-			IncludeChildSessions: false,
-			IncludeLastMessage:   true,
-			IncludeDirectory:     true,
-			NotifyChats:          []int64{},
+			Enabled:               false,
+			SessionDone:           true,
+			SessionFailed:         true,
+			SessionInterrupted:    true,
+			QuestionAsked:         true,
+			PermissionAsked:       true,
+			Retry:                 false,
+			IncludeChildSessions:  false,
+			IncludeLastMessage:    true,
+			IncludeDirectory:      true,
+			NotifyChats:           []int64{},
+			LongMessageMode:       "split",
+			ShowSummarizeThinking: true,
 		},
 		Security: Security{
 			AllowCustomFormAnswers: false,
@@ -76,17 +100,19 @@ type Patch struct {
 }
 
 type NotificationsPatch struct {
-	Enabled              *bool    `json:"enabled,omitempty"`
-	SessionDone          *bool    `json:"session_done,omitempty"`
-	SessionFailed        *bool    `json:"session_failed,omitempty"`
-	SessionInterrupted   *bool    `json:"session_interrupted,omitempty"`
-	QuestionAsked        *bool    `json:"question_asked,omitempty"`
-	PermissionAsked      *bool    `json:"permission_asked,omitempty"`
-	Retry                *bool    `json:"retry,omitempty"`
-	IncludeChildSessions *bool    `json:"include_child_sessions,omitempty"`
-	IncludeLastMessage   *bool    `json:"include_last_message,omitempty"`
-	IncludeDirectory     *bool    `json:"include_directory,omitempty"`
-	NotifyChats          *[]int64 `json:"notify_chats,omitempty"`
+	Enabled               *bool    `json:"enabled,omitempty"`
+	SessionDone           *bool    `json:"session_done,omitempty"`
+	SessionFailed         *bool    `json:"session_failed,omitempty"`
+	SessionInterrupted    *bool    `json:"session_interrupted,omitempty"`
+	QuestionAsked         *bool    `json:"question_asked,omitempty"`
+	PermissionAsked       *bool    `json:"permission_asked,omitempty"`
+	Retry                 *bool    `json:"retry,omitempty"`
+	IncludeChildSessions  *bool    `json:"include_child_sessions,omitempty"`
+	IncludeLastMessage    *bool    `json:"include_last_message,omitempty"`
+	IncludeDirectory      *bool    `json:"include_directory,omitempty"`
+	NotifyChats           *[]int64 `json:"notify_chats,omitempty"`
+	LongMessageMode       *string  `json:"long_message_mode,omitempty"`
+	ShowSummarizeThinking *bool    `json:"show_summarize_thinking,omitempty"`
 }
 
 type SecurityPatch struct {
@@ -220,6 +246,12 @@ func applyNotifications(dst *Notifications, p *NotificationsPatch) {
 	if p.NotifyChats != nil {
 		dst.NotifyChats = append([]int64(nil), (*p.NotifyChats)...)
 	}
+	if p.LongMessageMode != nil {
+		dst.LongMessageMode = *p.LongMessageMode
+	}
+	if p.ShowSummarizeThinking != nil {
+		dst.ShowSummarizeThinking = *p.ShowSummarizeThinking
+	}
 }
 
 func applySecurity(dst *Security, p *SecurityPatch) {
@@ -235,9 +267,18 @@ func normalize(s *Settings) {
 	if s.Notifications.NotifyChats == nil {
 		s.Notifications.NotifyChats = []int64{}
 	}
+	s.Notifications.LongMessageMode = strings.ToLower(strings.TrimSpace(s.Notifications.LongMessageMode))
+	if s.Notifications.LongMessageMode == "" {
+		s.Notifications.LongMessageMode = "split"
+	}
 }
 
 func validate(s Settings) error {
+	switch s.Notifications.LongMessageMode {
+	case "split", "summary":
+	default:
+		return fmt.Errorf("long_message_mode must be \"split\" or \"summary\"")
+	}
 	if len(s.Notifications.NotifyChats) > 50 {
 		return fmt.Errorf("notify_chats may contain at most 50 chats")
 	}
