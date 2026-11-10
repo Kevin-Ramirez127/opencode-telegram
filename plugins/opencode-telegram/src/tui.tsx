@@ -5,6 +5,22 @@ import { createSignal } from "solid-js"
 const DEFAULT_DAEMON = "http://127.0.0.1:8787"
 const TELEGRAM_ICON = "✈"
 const STATUS_POLL_MS = 10_000
+const START_TIMEOUT_MS = 15_000
+const START_POLL_MS = 400
+const START_COMMAND_TIMEOUT_MS = 20_000
+const HEALTH_TIMEOUT_MS = 1_500
+
+// Tried in order when the daemon is unreachable. The installer puts the
+// command in ~/.local/bin; the direct paths cover setups where PATH does not
+// include it yet, and systemd covers persistent user-service installs.
+const DEFAULT_START_COMMAND = [
+  'if command -v opencode-telegram >/dev/null 2>&1; then exec opencode-telegram start; fi',
+  'if [ -x "$HOME/.local/bin/opencode-telegram" ]; then exec "$HOME/.local/bin/opencode-telegram" start; fi',
+  'if [ -x "$HOME/.local/share/opencode-telegram/scripts/daemon.sh" ]; then exec "$HOME/.local/share/opencode-telegram/scripts/daemon.sh" start; fi',
+  'if command -v systemctl >/dev/null 2>&1; then exec systemctl --user start opencode-telegram; fi',
+  'echo "opencode-telegram is not installed; run ./install.sh or set the plugin startCommand option." >&2',
+  'exit 127',
+].join("; ")
 
 type LongMessageMode = "split" | "summary"
 
@@ -72,6 +88,145 @@ function authHeaders(context: Context): Record<string, string> {
   const option = (context.options as Record<string, unknown> | undefined)?.token
   const token = typeof option === "string" && option.trim() ? option : env("OPENCODE_TELEGRAM_TOKEN")
   return token ? { authorization: `Bearer ${token}` } : {}
+}
+
+function pluginOption(context: Context, name: string): unknown {
+  return (context.options as Record<string, unknown> | undefined)?.[name]
+}
+
+function startCommand(context: Context): string {
+  const option = pluginOption(context, "startCommand")
+  if (typeof option === "string" && option.trim()) return option.trim()
+  const fallback = env("OPENCODE_TELEGRAM_START_COMMAND")
+  if (fallback?.trim()) return fallback.trim()
+  return DEFAULT_START_COMMAND
+}
+
+function autoStart(context: Context): boolean {
+  const option = pluginOption(context, "autoStart")
+  if (typeof option === "boolean") return option
+  const fallback = env("OPENCODE_TELEGRAM_AUTOSTART")
+  return fallback ? /^(1|true|yes|on)$/i.test(fallback.trim()) : false
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// daemonAlive only checks that something answers on the plugin API. A 401
+// still means the daemon is running; only a connection failure means it has
+// to be started.
+async function daemonAlive(context: Context): Promise<boolean> {
+  const fetchFn = (globalThis as { fetch?: (input: string, init?: unknown) => Promise<unknown> }).fetch
+  if (typeof fetchFn !== "function") return false
+
+  const controller = typeof AbortController === "function" ? new AbortController() : undefined
+  const timer = setTimeout(() => controller?.abort(), HEALTH_TIMEOUT_MS)
+  try {
+    await fetchFn(daemonUrl(context) + "/health", {
+      method: "GET",
+      headers: { accept: "application/json", ...authHeaders(context) },
+      signal: controller?.signal,
+    })
+    return true
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+type StartResult = {
+  code: number | null
+  output: string
+}
+
+async function runShell(command: string, timeoutMs: number): Promise<StartResult> {
+  const { spawn } = (await import("node:child_process")) as {
+    spawn: (
+      command: string,
+      args: string[],
+      options: Record<string, unknown>,
+    ) => {
+      stdout?: { on: (event: string, listener: (chunk: unknown) => void) => void }
+      stderr?: { on: (event: string, listener: (chunk: unknown) => void) => void }
+      on: (event: string, listener: (value: unknown) => void) => void
+      kill: (signal?: string) => void
+    }
+  }
+
+  return await new Promise<StartResult>((resolve) => {
+    let output = ""
+    let settled = false
+    let child: ReturnType<typeof spawn> | undefined
+    const finish = (code: number | null) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve({ code, output: output.trim() })
+    }
+    const timer = setTimeout(() => {
+      output += "\n(start command timed out)"
+      child?.kill("SIGTERM")
+      finish(null)
+    }, timeoutMs)
+
+    try {
+      child = spawn("sh", ["-c", command], {
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      })
+    } catch (error) {
+      output = errText(error)
+      finish(null)
+      return
+    }
+
+    child.stdout?.on("data", (chunk) => {
+      output += String(chunk)
+    })
+    child.stderr?.on("data", (chunk) => {
+      output += String(chunk)
+    })
+    child.on("error", (error) => {
+      output += `\n${errText(error)}`
+      finish(null)
+    })
+    // "close" fires after stdout/stderr are drained, unlike "exit".
+    child.on("close", (code) => finish(typeof code === "number" ? code : null))
+  })
+}
+
+function trimOutput(value: string, limit = 600): string {
+  const text = value.trim()
+  return text.length > limit ? `${text.slice(0, limit)}…` : text
+}
+
+// ensureDaemon starts the installed service (or the command configured by the
+// startCommand plugin option) and waits for its loopback API to answer.
+async function ensureDaemon(context: Context): Promise<void> {
+  if (await daemonAlive(context)) return
+
+  const result = await runShell(startCommand(context), START_COMMAND_TIMEOUT_MS)
+  if (await daemonAlive(context)) return
+
+  if (result.code !== 0 && result.code !== null) {
+    const detail = result.output ? `\n\n${trimOutput(result.output)}` : ""
+    throw new Error(`Could not start the Telegram service (exit code ${result.code}).${detail}`)
+  }
+
+  const deadline = Date.now() + START_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    await sleep(START_POLL_MS)
+    if (await daemonAlive(context)) return
+  }
+
+  const detail = result.output ? `\n\n${trimOutput(result.output)}` : ""
+  throw new Error(
+    `Started the Telegram service, but ${daemonUrl(context)} did not respond within ` +
+      `${Math.round(START_TIMEOUT_MS / 1000)}s.${detail}\n\n` +
+      `Check the daemon log with "opencode-telegram logs".`,
+  )
 }
 
 async function request(
@@ -173,6 +328,9 @@ function createNotificationStatus(context: Context) {
       setError(undefined)
     } catch (cause) {
       if (disposed) return
+      // A stopped daemon is the normal "off" state, not an error state the
+      // footer needs to advertise.
+      setEnabled(false)
       setError(errText(cause))
     } finally {
       refreshing = false
@@ -187,17 +345,41 @@ function createNotificationStatus(context: Context) {
     if (busy()) return
     setBusy(true)
     try {
-      const current = enabled() ?? (await load(context)).settings.notifications.enabled
-      const next = !current
+      let data: SettingsResponse | undefined
+      let started = false
+      try {
+        data = await load(context)
+      } catch (cause) {
+        // If the daemon is simply not running, turning the icon on starts it
+        // and then enables notifications. Any other failure (bad token, old
+        // daemon, ...) is surfaced instead of launching a duplicate.
+        if (await daemonAlive(context)) throw cause
+        context.ui.toast.show({
+          title: "OpenCode Telegram",
+          message: "Starting the Telegram service…",
+          variant: "info",
+          duration: 2000,
+        })
+        await ensureDaemon(context)
+        data = await load(context)
+        started = true
+      }
+
+      if (!data) return
+      const next = started ? true : !data.settings.notifications.enabled
       await patchNotifications(context, { enabled: next })
       version += 1
       setEnabled(next)
       setError(undefined)
       context.ui.toast.show({
         title: "OpenCode Telegram",
-        message: next ? "Notifications enabled." : "Notifications disabled.",
+        message: started
+          ? "Telegram service started and notifications enabled."
+          : next
+            ? "Notifications enabled."
+            : "Notifications disabled.",
         variant: next ? "success" : "info",
-        duration: 2500,
+        duration: started ? 3000 : 2500,
       })
     } catch (cause) {
       setError(errText(cause))
@@ -224,7 +406,6 @@ function TelegramStatus(props: { context: Context; status: NotificationStatus })
   const { context, status } = props
 
   const color = () => {
-    if (status.error()) return context.theme.text.feedback.warning.base
     if (status.enabled() === true) return context.theme.text.feedback.success.base
     return context.theme.text.muted
   }
@@ -232,8 +413,7 @@ function TelegramStatus(props: { context: Context; status: NotificationStatus })
   const label = () => {
     if (status.busy()) return "…"
     if (status.enabled() === true) return "on"
-    if (status.enabled() === false) return "off"
-    return "?"
+    return "off"
   }
 
   return (
@@ -426,19 +606,36 @@ async function handleChoice(context: Context, value: string): Promise<boolean> {
 
 async function openSettings(context: Context, onChange?: () => void) {
   for (;;) {
-    let data: SettingsResponse
+    let data: SettingsResponse | undefined
     try {
       data = await load(context)
     } catch (error) {
-      await context.ui.dialog.alert({
-        title: "OpenCode Telegram",
-        message:
-          `Could not reach the daemon at ${daemonUrl(context)}.\n\n` +
-          `Start it with "opencode-telegram start" and try again.\n\n${errText(error)}`,
-      })
-      return
+      if (await daemonAlive(context)) {
+        await context.ui.dialog.alert({
+          title: "OpenCode Telegram",
+          message: `The daemon at ${daemonUrl(context)} did not answer correctly.\n\n${errText(error)}`,
+        })
+        return
+      }
+
+      // Opening the settings is an explicit "turn it on" action: bring the
+      // service up instead of asking the user to leave OpenCode.
+      try {
+        await ensureDaemon(context)
+        data = await load(context)
+      } catch (startError) {
+        await context.ui.dialog.alert({
+          title: "OpenCode Telegram",
+          message:
+            `Could not reach the daemon at ${daemonUrl(context)} and could not start it.\n\n` +
+            `${errText(startError)}\n\n` +
+            `Run "opencode-telegram start" manually to see the full log.`,
+        })
+        return
+      }
     }
 
+    if (!data) return
     const status = data.status
     const subtitle = status?.opencode_ok ? "OpenCode connected" : "OpenCode disconnected"
     const choice = await context.ui.dialog.select({
@@ -483,6 +680,14 @@ export default Plugin.define({
         },
       ],
     }))
+
+    // Optional configuration path: start the service as soon as the plugin
+    // loads. The footer still reflects the daemon's notification setting.
+    if (autoStart(context)) {
+      void ensureDaemon(context)
+        .then(() => status.refresh())
+        .catch((error) => toastError(context, error))
+    }
 
     return () => {
       status.stop()

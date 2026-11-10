@@ -200,6 +200,12 @@ notifications**). It edits `data/settings.json` through the daemon API:
 }
 ```
 
+The footer **✈ Telegram** icon shows **off** whenever the daemon is stopped.
+Clicking it (or opening `/telegram`) starts the daemon through
+`opencode-telegram start`; if the icon was off, it also enables notifications.
+Set the plugin option `autoStart` to `true` to start the service when the
+plugin loads.
+
 `notify_chats` empty means “every allowlisted chat”. Entries must themselves be
 allowlisted; the API rejects anything else.
 
