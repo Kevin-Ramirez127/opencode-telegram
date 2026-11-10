@@ -22,15 +22,34 @@ import (
 )
 
 type fakeTelegram struct {
-	mu     sync.Mutex
-	texts  []string
-	nextID int
+	mu         sync.Mutex
+	texts      []string
+	nextID     int
+	commands   []tgbotapi.BotCommand
+	registered []tgbotapi.BotCommand
 }
 
 func (f *fakeTelegram) handler(w http.ResponseWriter, r *http.Request) {
 	method := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
-	if method == "getMe" {
+	switch method {
+	case "getMe":
 		_, _ = io.WriteString(w, `{"ok":true,"result":{"id":1,"is_bot":true,"first_name":"Test","username":"test_bot"}}`)
+		return
+	case "getMyCommands":
+		f.mu.Lock()
+		commands := append([]tgbotapi.BotCommand(nil), f.commands...)
+		f.mu.Unlock()
+		result, _ := json.Marshal(commands)
+		_, _ = io.WriteString(w, `{"ok":true,"result":`+string(result)+`}`)
+		return
+	case "setMyCommands":
+		_ = r.ParseForm()
+		var commands []tgbotapi.BotCommand
+		_ = json.Unmarshal([]byte(r.FormValue("commands")), &commands)
+		f.mu.Lock()
+		f.registered = commands
+		f.mu.Unlock()
+		_, _ = io.WriteString(w, `{"ok":true,"result":true}`)
 		return
 	}
 	_ = r.ParseForm()
@@ -65,6 +84,12 @@ func (f *fakeTelegram) allTexts() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.texts...)
+}
+
+func (f *fakeTelegram) registeredCommands() []tgbotapi.BotCommand {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]tgbotapi.BotCommand(nil), f.registered...)
 }
 
 type fakeOpenCode struct {
