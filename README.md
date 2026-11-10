@@ -25,21 +25,21 @@ Backend: **Go**. Control/install scripts: **bash**.
 ```
 ┌──────────────────────┐        SSE /api/event         ┌────────────────────────┐
 │  OpenCode background │ ◄──────────────────────────── │  opencode-telegram     │
-│  service (v2 API)    │                              │  Go daemon             │
-│                      │  REST: sessions, forms,      │                        │
-│  sessions / forms /  │  permissions, prompts        │  state machine         │
+│  service (v2 API)    │                               │  Go daemon             │
+│                      │  REST: sessions, forms,       │                        │
+│  sessions / forms /  │  permissions, prompts         │  state machine         │
 │  permissions         │ ────────────────────────────► │  allowlist + settings  │
-└──────────────────────┘                              └───────────┬────────────┘
-                                                                  │ Telegram Bot API
-                                                                  ▼
+└──────────────────────┘                               └───────────┬────────────┘
+                                                                   │ Telegram Bot API
+                                                                   ▼
                                                       ┌────────────────────────┐
                                                       │  allowlisted chats     │
                                                       └────────────────────────┘
                                                                   ▲
                                                                   │ PATCH settings
                                                       ┌───────────┴────────────┐
-                                                      │ OpenCode plugin (TUI)   │
-                                                      │ /telegram               │
+                                                      │ OpenCode plugin (TUI)  │
+                                                      │ /telegram              │
                                                       └────────────────────────┘
 ```
 
