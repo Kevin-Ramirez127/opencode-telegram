@@ -427,6 +427,67 @@ func (c *Client) SwitchModel(ctx context.Context, sessionID string, model ModelR
 	return c.do(ctx, http.MethodPost, path, map[string]any{"model": model}, nil)
 }
 
+type UsageMeter struct {
+	Percent  float64 `json:"percent"`
+	Limited  bool    `json:"limited"`
+	ResetsAt int64   `json:"resetsAt"`
+}
+
+type UsageGo struct {
+	Rolling UsageMeter `json:"rolling"`
+	Weekly  UsageMeter `json:"weekly"`
+	Monthly UsageMeter `json:"monthly"`
+}
+
+type UsageWorkspace struct {
+	ID       string `json:"id"`
+	Name     string `json:"name,omitempty"`
+	UsageURL string `json:"usageURL"`
+}
+
+type UsageBudgetModel struct {
+	ProviderID string  `json:"providerID"`
+	ModelID    string  `json:"modelID"`
+	Name       string  `json:"name"`
+	Spent      float64 `json:"spent,omitempty"`
+}
+
+type UsageBudget struct {
+	ID       string             `json:"id"`
+	Limit    float64            `json:"limit"`
+	Spent    float64            `json:"spent"`
+	Scope    string             `json:"scope"`
+	Per      string             `json:"per"`
+	Coverage string             `json:"coverage"`
+	Models   []UsageBudgetModel `json:"models"`
+	Vendors  []string           `json:"vendors"`
+	Picked   bool               `json:"picked"`
+	Shared   bool               `json:"shared"`
+	ResetsAt int64              `json:"resetsAt"`
+}
+
+type UsageLimits struct {
+	Workspace UsageWorkspace `json:"workspace"`
+	Go        *UsageGo       `json:"go,omitempty"`
+	Budgets   []UsageBudget  `json:"budgets"`
+}
+
+// UsageLimits returns the OpenCode Go allowance and Console budgets for a
+// location. A nil result means the location is not signed in.
+func (c *Client) UsageLimits(ctx context.Context, directory string) (*UsageLimits, error) {
+	var out struct {
+		Data *UsageLimits `json:"data"`
+	}
+	path := "/api/experimental/usage/limits"
+	if q := locationQuery(directory); len(q) > 0 {
+		path += "?" + q
+	}
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Data, nil
+}
+
 func locationQuery(directory string) string {
 	q := url.Values{}
 	if directory != "" {

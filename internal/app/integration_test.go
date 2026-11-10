@@ -152,6 +152,8 @@ type fakeOpenCode struct {
 	sessionModel  occlient.ModelRef
 	agents        []occlient.AgentInfo
 	models        []occlient.ModelInfo
+	usage         *occlient.UsageLimits
+	usageErr      bool
 	switchedAgent string
 	switchedModel occlient.ModelRef
 	lastAssistant string
@@ -210,6 +212,17 @@ func (f *fakeOpenCode) handler(w http.ResponseWriter, r *http.Request) {
 		models := append([]occlient.ModelInfo(nil), f.models...)
 		f.mu.Unlock()
 		writeFakeJSON(w, map[string]any{"data": models})
+	case r.Method == http.MethodGet && r.URL.Path == "/api/experimental/usage/limits":
+		f.mu.Lock()
+		usage := f.usage
+		usageErr := f.usageErr
+		f.mu.Unlock()
+		if usageErr {
+			w.WriteHeader(http.StatusInternalServerError)
+			writeFakeJSON(w, map[string]any{"message": "usage service unavailable"})
+			return
+		}
+		writeFakeJSON(w, map[string]any{"data": usage})
 	case r.Method == http.MethodPost && r.URL.Path == "/api/session/ses_1/agent":
 		var body struct {
 			Agent string `json:"agent"`
@@ -315,6 +328,18 @@ func newIntegrationApp(t *testing.T) (*App, *fakeTelegram, *fakeOpenCode) {
 			{ID: "deepseek-v4-flash", ModelID: "deepseek-v4-flash", ProviderID: "opencode-go", Name: "DeepSeek V4 Flash", Status: "active", Enabled: true, Type: "chat"},
 			{ID: "gpt-6", ModelID: "gpt-6", ProviderID: "opencode", Name: "GPT-6", Status: "active", Enabled: true, Type: "chat"},
 			{ID: "old-model", ModelID: "old-model", ProviderID: "opencode", Name: "Old Model", Status: "deprecated", Enabled: false, Type: "chat"},
+		},
+		usage: &occlient.UsageLimits{
+			Workspace: occlient.UsageWorkspace{
+				ID:       "org_test",
+				Name:     "Personal",
+				UsageURL: "https://opencode.ai/console/org_test/activity/overview",
+			},
+			Go: &occlient.UsageGo{
+				Rolling: occlient.UsageMeter{Percent: 2, ResetsAt: 1_800_000_000_000},
+				Weekly:  occlient.UsageMeter{Percent: 5, ResetsAt: 1_800_100_000_000},
+				Monthly: occlient.UsageMeter{Percent: 3, ResetsAt: 1_800_200_000_000},
+			},
 		},
 		lastAssistant: "All changes are in.",
 	}
@@ -559,6 +584,49 @@ func allowModelSwitching(t *testing.T, a *App) {
 		Security: &settings.SecurityPatch{AllowModelSwitching: &on},
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestUsageCommandShowsLimits(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+
+	a.handleCommand(123, 123, "/usage")
+
+	all := ftg.allText()
+	for _, want := range []string{
+		"OpenCode usage limits",
+		"Workspace: **Personal**",
+		"Open usage dashboard",
+		"| Rolling | 2% |",
+		"| Weekly | 5% |",
+		"| Monthly | 3% |",
+		"No budgets configured.",
+	} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("usage message missing %q:\n%s", want, all)
+		}
+	}
+}
+
+func TestUsageCommandReportsErrors(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	foc.usageErr = true
+
+	a.handleCommand(123, 123, "/usage")
+
+	if got := ftg.lastText(); !strings.Contains(got, "Could not read usage limits") {
+		t.Fatalf("usage error feedback = %q", got)
+	}
+}
+
+func TestUsageCommandShowsNullResponse(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	foc.usage = nil
+
+	a.handleCommand(123, 123, "/usage")
+
+	if got := ftg.lastText(); !strings.Contains(got, "Usage limits are unavailable") {
+		t.Fatalf("null usage feedback = %q", got)
 	}
 }
 

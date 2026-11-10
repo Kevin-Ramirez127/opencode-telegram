@@ -23,6 +23,7 @@ var botCommands = []tgbotapi.BotCommand{
 	{Command: "unbind", Description: "Remove the session binding"},
 	{Command: "agents", Description: "List or switch the bound session's agent"},
 	{Command: "models", Description: "List all available chat models"},
+	{Command: "usage", Description: "Show OpenCode Go and Console usage limits"},
 	{Command: "interrupt", Description: "Stop the bound session's current run"},
 	{Command: "notify", Description: "Enable or disable notifications"},
 	{Command: "settings", Description: "Show notification settings"},

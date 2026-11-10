@@ -276,6 +276,7 @@ Change them from the plugin (which asks for confirmation) or by editing
 | `/unbind` | Remove the binding |
 | `/agents [agent-id]` | List or switch the bound session's agent |
 | `/models` | List every available chat model with a switch button for each (requires `allow_model_switching`) |
+| `/usage` | Show OpenCode Go and Console usage limits |
 | `/interrupt` | Interrupt the bound session's current run |
 | `/notify on\|off` | Toggle notification delivery |
 | `/settings` | Show current notification/security settings |
@@ -297,6 +298,10 @@ it replies that the configuration does not allow choosing models. Both commands
 show a temporary loading message if the OpenCode API takes longer than 250 ms.
 Finished-session notifications include an `Agent:` line showing the agent that
 handled the run.
+
+`/usage` reads the OpenCode Console usage-limits API and renders the workspace,
+rolling/weekly/monthly OpenCode Go percentages, reset times, and any Console
+budgets as Markdown tables. API failures are reported in the chat.
 
 The daemon also adds its commands to the bot menu if they are missing. Existing
 bot commands are preserved, so commands registered with BotFather are not

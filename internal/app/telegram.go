@@ -149,6 +149,8 @@ func (a *App) handleCommand(chatID, userID int64, text string) {
 		a.showAgents(chatID)
 	case "/models", "/model":
 		a.showModels(chatID)
+	case "/usage":
+		a.showUsage(chatID)
 	case "/notify":
 		a.commandNotify(chatID, args)
 	case "/interrupt", "/stop":
@@ -181,6 +183,7 @@ func (a *App) helpText() string {
 		"/unbind — remove the binding",
 		"/agents [id] — list or switch the bound session's agent",
 		"/models — list all available chat models",
+		"/usage — show OpenCode Go and Console usage limits",
 		"/interrupt — stop the bound session's current run",
 		"/notify on|off — enable or disable notifications",
 		"/settings — show notification settings",
