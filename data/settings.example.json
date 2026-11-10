@@ -12,12 +12,10 @@
     "include_directory": true,
     "notify_chats": [],
     "long_message_mode": "split",
-    "show_raw_thinking": false,
-    "resume_thinking_mode": "summary"
+    "show_summarize_thinking": true
   },
   "security": {
     "allow_custom_form_answers": false,
-    "allow_new_messages": false,
-    "allow_resume_thinking": false
+    "allow_new_messages": false
   }
 }

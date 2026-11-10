@@ -12,18 +12,16 @@ import (
 	"opencode-telegram/internal/occlient"
 )
 
-// Long assistant messages are delivered either block by block or as a short
-// preview with an on-demand summary ("resume"). These prompts are used for the
-// summary actions and never mutate the OpenCode session history.
+// Summary actions use the stateless generation endpoint with the exact text
+// that was shown, so they never summarize a newer message by mistake.
 const (
-	messageSummaryPrompt = "Summarize your most recent assistant response for a chat notification. " +
+	messageSummaryPrompt = "Summarize the following assistant output for a chat notification. " +
 		"Keep every important fact, decision, command, and next step. Be concise, use short bullets, " +
 		"do not call tools, and do not modify files. Output only the summary."
-	thinkingSummaryPrompt = "Summarize the reasoning/thinking from your most recent assistant message. " +
+	thinkingSummaryPrompt = "Summarize the following reasoning/thinking for a chat notification. " +
 		"Keep the key decisions, assumptions, and open questions. Be concise, do not call tools, " +
 		"and do not modify files. Output only the summary."
-	thinkingResumePrompt = "Continue from your previous reasoning. Resume the task without repeating work " +
-		"you already completed. If you were interrupted, pick up exactly where you left off."
+	maxSummaryInput = 32000
 )
 
 // outgoingMessage is one Telegram message and its optional inline keyboard.
@@ -33,34 +31,28 @@ type outgoingMessage struct {
 }
 
 // notificationMarkup builds the buttons attached to a session notification.
-// hasThinking controls the thinking buttons, and offerSummary adds the
-// on-demand "Ask for resume" button for oversized messages.
-func (a *App) notificationMarkup(sessionID string, hasThinking, offerSummary bool) tgbotapi.InlineKeyboardMarkup {
+// The buttons target the exact assistant message that produced the
+// notification.
+func (a *App) notificationMarkup(sessionID, messageID string, includeOutput, hasThinking bool) tgbotapi.InlineKeyboardMarkup {
 	st := a.settings.Get()
 	var rows [][]tgbotapi.InlineKeyboardButton
 
+	if includeOutput {
+		token := a.addAction(action{Kind: "summarize_output", SessionID: sessionID, MessageID: messageID})
+		rows = append(rows, []tgbotapi.InlineKeyboardButton{
+			tgbotapi.NewInlineKeyboardButtonData("📄 Summarize output", callbackData(token)),
+		})
+	}
+	if hasThinking {
+		token := a.addAction(action{Kind: "show_thinking", SessionID: sessionID, MessageID: messageID})
+		rows = append(rows, []tgbotapi.InlineKeyboardButton{
+			tgbotapi.NewInlineKeyboardButtonData("🧠 Show thinking", callbackData(token)),
+		})
+	}
 	if st.Security.AllowNewMessages {
 		token := a.addAction(action{Kind: "bind_reply", SessionID: sessionID})
 		rows = append(rows, []tgbotapi.InlineKeyboardButton{
 			tgbotapi.NewInlineKeyboardButtonData("Reply to this session", callbackData(token)),
-		})
-	}
-	if hasThinking && st.Notifications.ShowRawThinking {
-		token := a.addAction(action{Kind: "show_thinking", SessionID: sessionID})
-		rows = append(rows, []tgbotapi.InlineKeyboardButton{
-			tgbotapi.NewInlineKeyboardButtonData("🧠 Show raw thinking", callbackData(token)),
-		})
-	}
-	if hasThinking && st.Security.AllowResumeThinking {
-		token := a.addAction(action{Kind: "resume_thinking", SessionID: sessionID})
-		rows = append(rows, []tgbotapi.InlineKeyboardButton{
-			tgbotapi.NewInlineKeyboardButtonData("↩️ Resume thinking", callbackData(token)),
-		})
-	}
-	if offerSummary {
-		token := a.addAction(action{Kind: "resume_message", SessionID: sessionID})
-		rows = append(rows, []tgbotapi.InlineKeyboardButton{
-			tgbotapi.NewInlineKeyboardButtonData("📄 Summarize last message", callbackData(token)),
 		})
 	}
 	return tgbotapi.NewInlineKeyboardMarkup(rows...)
@@ -169,48 +161,71 @@ func (a *App) lastAssistantMessage(sessionID string) (occlient.Message, bool) {
 	return msg, ok
 }
 
-func (a *App) lastAssistantWithReasoning(sessionID string) (occlient.Message, bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	msg, ok, err := a.oc.LastAssistantWithReasoning(ctx, sessionID)
-	if err != nil {
-		log.Printf("thinking: could not read messages for %s: %v", sessionID, err)
-		return occlient.Message{}, false
+// messageForAction resolves the exact message a button was created for. It
+// only falls back to the latest message for very old action tokens.
+func (a *App) messageForAction(act action) (occlient.Message, error) {
+	if act.MessageID != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		return a.oc.GetMessage(ctx, act.SessionID, act.MessageID)
 	}
-	return msg, ok
+	msg, ok := a.lastAssistantMessage(act.SessionID)
+	if !ok {
+		return occlient.Message{}, fmt.Errorf("no assistant message found for session %s", act.SessionID)
+	}
+	return msg, nil
 }
 
-func (a *App) generateText(sessionID, prompt string) (string, error) {
+func (a *App) generateSummary(sessionID, prompt string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	return a.oc.Generate(ctx, sessionID, prompt)
 }
 
-// showRawThinking sends the raw reasoning blocks of the newest assistant
-// message that has any.
-func (a *App) showRawThinking(chatID int64, act action) {
-	if !a.settings.Get().Notifications.ShowRawThinking {
-		a.send(chatID, "Showing raw thinking is disabled in the OpenCode Telegram plugin.")
+// showThinking sends the raw reasoning blocks of the message the button was
+// created for.
+func (a *App) showThinking(chatID int64, act action) {
+	msg, err := a.messageForAction(act)
+	if err != nil {
+		a.send(chatID, fmt.Sprintf("❌ Could not read the thinking: %v", err))
 		return
 	}
-	msg, ok := a.lastAssistantWithReasoning(act.SessionID)
-	if !ok {
-		a.send(chatID, "No thinking found for the latest message of this session.")
+	reasoning := msg.ReasoningParts()
+	if len(reasoning) == 0 {
+		a.send(chatID, "No thinking found for this message.")
 		return
 	}
+
 	header := fmt.Sprintf("🧠 Raw thinking\nSession: %s", a.sessionLabel(act.SessionID))
-	token := a.addAction(action{Kind: "summarize_thinking", SessionID: act.SessionID})
-	markup := tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{
-		tgbotapi.NewInlineKeyboardButtonData("📝 Summarize thinking", callbackData(token)),
-	})
-	a.sendPartsToChatWithMarkup(chatID, contentMessages(header, msg.ReasoningParts()), markup)
+	markup := tgbotapi.InlineKeyboardMarkup{}
+	if a.settings.Get().Notifications.ShowSummarizeThinking {
+		token := a.addAction(action{
+			Kind:      "summarize_thinking",
+			SessionID: act.SessionID,
+			MessageID: msg.ID,
+		})
+		markup = tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{
+			tgbotapi.NewInlineKeyboardButtonData("📝 Summarize thinking", callbackData(token)),
+		})
+	}
+	a.sendPartsToChatWithMarkup(chatID, contentMessages(header, reasoning), markup)
 }
 
-// summarizeThinking asks OpenCode for a summary of the reasoning and sends it.
-// It is the default "Resume thinking" action and is also offered directly on
-// raw thinking messages.
+// summarizeThinking summarizes the reasoning of the message the button was
+// created for.
 func (a *App) summarizeThinking(chatID int64, act action) {
-	text, err := a.generateText(act.SessionID, thinkingSummaryPrompt)
+	msg, err := a.messageForAction(act)
+	if err != nil {
+		a.send(chatID, fmt.Sprintf("❌ Could not read the thinking: %v", err))
+		return
+	}
+	reasoning := msg.ReasoningText()
+	if reasoning == "" {
+		a.send(chatID, "No thinking found for this message.")
+		return
+	}
+
+	text, err := a.generateSummary(act.SessionID, thinkingSummaryPrompt+"\n\n---\n\n"+truncateText(reasoning, maxSummaryInput))
 	if err != nil {
 		a.send(chatID, fmt.Sprintf("❌ Could not summarize the thinking: %v", err))
 		return
@@ -219,58 +234,35 @@ func (a *App) summarizeThinking(chatID int64, act action) {
 		a.send(chatID, "OpenCode returned an empty summary.")
 		return
 	}
-	header := fmt.Sprintf("🧠 Thinking resume\nSession: %s", a.sessionLabel(act.SessionID))
+
+	header := fmt.Sprintf("🧠 Thinking summary\nSession: %s", a.sessionLabel(act.SessionID))
 	a.sendPartsToChat(chatID, contentMessages(header, []string{text}))
 }
 
-// resumeThinking asks OpenCode either to continue the run or to summarize the
-// reasoning, depending on the plugin setting.
-func (a *App) resumeThinking(chatID int64, act action) {
-	st := a.settings.Get()
-	if !st.Security.AllowResumeThinking {
-		a.send(chatID, "Resuming thinking is disabled. Enable it in the OpenCode Telegram plugin first.")
-		return
-	}
-	if _, ok := a.lastAssistantWithReasoning(act.SessionID); !ok {
-		a.send(chatID, "No thinking found for the latest message of this session.")
-		return
-	}
-
-	if st.Notifications.ResumeThinkingMode == "summary" {
-		a.summarizeThinking(chatID, act)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	if err := a.oc.PromptResume(ctx, act.SessionID, thinkingResumePrompt); err != nil {
-		a.send(chatID, fmt.Sprintf("❌ Could not resume thinking: %v", err))
-		return
-	}
-	a.send(chatID, fmt.Sprintf("▶️ Asked OpenCode to resume thinking for %s.", a.sessionLabel(act.SessionID)))
-}
-
-// resumeMessage sends a generated summary of the last assistant message. It is
-// used when "long_message_mode" is "summary" and the user taps the button on an
-// oversized notification.
-func (a *App) resumeMessage(chatID int64, act action) {
-	msg, ok := a.lastAssistantMessage(act.SessionID)
-	if !ok {
-		a.send(chatID, "No assistant message found for this session.")
-		return
-	}
-	text, err := a.generateText(act.SessionID, messageSummaryPrompt)
+// summarizeOutput summarizes the assistant output of the message the button was
+// created for.
+func (a *App) summarizeOutput(chatID int64, act action) {
+	msg, err := a.messageForAction(act)
 	if err != nil {
-		a.send(chatID, fmt.Sprintf("❌ Could not generate a resume: %v", err))
+		a.send(chatID, fmt.Sprintf("❌ Could not read the output: %v", err))
+		return
+	}
+	output := msg.FinalText()
+	if output == "" {
+		a.send(chatID, "No assistant output found for this message.")
+		return
+	}
+
+	text, err := a.generateSummary(act.SessionID, messageSummaryPrompt+"\n\n---\n\n"+truncateText(output, maxSummaryInput))
+	if err != nil {
+		a.send(chatID, fmt.Sprintf("❌ Could not summarize the output: %v", err))
 		return
 	}
 	if text == "" {
-		text = truncateText(msg.FinalText(), maxTelegramText)
-	}
-	if strings.TrimSpace(text) == "" {
-		a.send(chatID, "OpenCode returned an empty resume.")
+		a.send(chatID, "OpenCode returned an empty summary.")
 		return
 	}
-	header := fmt.Sprintf("📄 Resume of the last message\nSession: %s", a.sessionLabel(act.SessionID))
+
+	header := fmt.Sprintf("📄 Output summary\nSession: %s", a.sessionLabel(act.SessionID))
 	a.sendPartsToChat(chatID, contentMessages(header, []string{text}))
 }

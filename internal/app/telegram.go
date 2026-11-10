@@ -347,13 +347,11 @@ func (a *App) showSettings(chatID int64) {
 		fmt.Sprintf("Include last message: %s", onOff(st.IncludeLastMessage)),
 		fmt.Sprintf("Include directory: %s", onOff(st.IncludeDirectory)),
 		fmt.Sprintf("Long messages: %s", st.LongMessageMode),
-		fmt.Sprintf("Show raw thinking button: %s", onOff(st.ShowRawThinking)),
-		fmt.Sprintf("Resume thinking mode: %s", st.ResumeThinkingMode),
+		fmt.Sprintf("Summarize thinking button: %s", onOff(st.ShowSummarizeThinking)),
 		"",
 		"Security (change these from the OpenCode plugin, not Telegram):",
 		fmt.Sprintf("Allow custom question answers: %s", onOff(sec.AllowCustomFormAnswers)),
 		fmt.Sprintf("Allow new messages: %s", onOff(sec.AllowNewMessages)),
-		fmt.Sprintf("Allow resume thinking: %s", onOff(sec.AllowResumeThinking)),
 		"",
 		"Use /notify on|off to toggle delivery.",
 	}, "\n")
@@ -401,6 +399,17 @@ func (a *App) handleCallback(chatID int64, data string) {
 		return
 	}
 
+	// Summary/thinking buttons are single-use per chat so repeated taps cannot
+	// start multiple expensive generations, while other notify chats can still
+	// use their own copy of the same broadcast button.
+	switch act.Kind {
+	case "show_thinking", "summarize_thinking", "summarize_output":
+		if !a.claimAction(token, chatID) {
+			a.send(chatID, "⚠️ This action was already used.")
+			return
+		}
+	}
+
 	switch act.Kind {
 	case "bind":
 		a.bindFromCallback(chatID, act)
@@ -408,13 +417,11 @@ func (a *App) handleCallback(chatID int64, data string) {
 		a.setBinding(chatID, act.SessionID)
 		a.send(chatID, fmt.Sprintf("🔗 Bound to %s.\nType your message now.", a.sessionLabel(act.SessionID)))
 	case "show_thinking":
-		a.showRawThinking(chatID, act)
+		a.showThinking(chatID, act)
 	case "summarize_thinking":
 		a.summarizeThinking(chatID, act)
-	case "resume_thinking":
-		a.resumeThinking(chatID, act)
-	case "resume_message":
-		a.resumeMessage(chatID, act)
+	case "summarize_output":
+		a.summarizeOutput(chatID, act)
 	case "unbind":
 		a.setBinding(chatID, "")
 		a.send(chatID, "🔓 Unbound.")

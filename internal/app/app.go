@@ -423,6 +423,7 @@ func fileChanged(path string, cached *os.FileInfo) bool {
 type action struct {
 	Kind      string
 	SessionID string
+	MessageID string
 	FormID    string
 	FieldKey  string
 	RequestID string
@@ -430,6 +431,10 @@ type action struct {
 	Decision  string
 	ChatID    int64
 	Expires   time.Time
+	// UsedBy makes summary/thinking buttons single-use per chat. The same
+	// action token is broadcast to several chats, but each chat may tap its
+	// own copy once.
+	UsedBy map[int64]bool
 }
 
 func (a *App) addAction(act action) string {
@@ -461,6 +466,25 @@ func (a *App) delAction(token string) {
 	a.mu.Lock()
 	delete(a.actions, token)
 	a.mu.Unlock()
+}
+
+// claimAction marks an action as used by one chat. It returns false when that
+// chat already used it. Other chats sharing the same token are unaffected.
+func (a *App) claimAction(token string, chatID int64) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	act := a.actions[token]
+	if act == nil {
+		return false
+	}
+	if act.UsedBy == nil {
+		act.UsedBy = make(map[int64]bool)
+	}
+	if act.UsedBy[chatID] {
+		return false
+	}
+	act.UsedBy[chatID] = true
+	return true
 }
 
 func (a *App) delFormActions(formID string) {

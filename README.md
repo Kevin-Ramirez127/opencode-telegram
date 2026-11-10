@@ -191,13 +191,11 @@ notifications**). It edits `data/settings.json` through the daemon API:
     "include_directory": true,
     "notify_chats": [],
     "long_message_mode": "split",
-    "show_raw_thinking": false,
-    "resume_thinking_mode": "summary"
+    "show_summarize_thinking": true
   },
   "security": {
     "allow_custom_form_answers": false,
-    "allow_new_messages": false,
-    "allow_resume_thinking": false
+    "allow_new_messages": false
   }
 }
 ```
@@ -216,28 +214,29 @@ daemon does when the last assistant message would not fit:
 | Value | Behavior |
 |---|---|
 | `split` (default) | Send one message per assistant text block. A single oversized block is split at paragraph/line boundaries. Nothing is silently truncated. |
-| `summary` | Add a **“Summarize last message”** button to notifications. If the message is oversized, send a short preview plus that button instead of splitting it. Pressing the button asks OpenCode to summarize the response (`/api/session/{id}/generate`) and sends the resume. |
+| `summary` | If the message is oversized, send a short preview instead of splitting it. The **Summarize output** button is available on every notification with assistant output, regardless of mode. |
 
-### Thinking buttons
+### Output and thinking buttons
 
-When the latest assistant message carries reasoning, notifications can include:
+Notifications that include assistant output get:
 
-- **🧠 Show raw thinking** — sends the raw reasoning text (`show_raw_thinking`).
-  Long reasoning is split the same way as normal text. The raw thinking message
-  includes a **📝 Summarize thinking** button that generates a summary on
-  demand.
-- **↩️ Resume thinking** — summarizes the reasoning, controlled by
-  `resume_thinking_mode`:
-  - `summary` (default): ask OpenCode for a summary of the reasoning and send
-    it;
-  - `continue` (optional): send a fixed prompt with `resume: true` so OpenCode
-    continues the run from its previous reasoning.
+- **📄 Summarize output** — asks OpenCode to summarize that exact output and
+  sends the summary. The request uses the session's configured model and does
+  not add a message to the session history.
 
-Both buttons are off by default. Raw thinking is read-only, but “Resume
-thinking” requires the `allow_resume_thinking` security switch because it calls
-OpenCode. In the default `summary` mode it only generates text; in `continue`
-mode it starts an agent turn. Enable the switches from `/telegram` in the
-OpenCode TUI; the plugin asks for confirmation.
+When the assistant message carries reasoning, notifications also get:
+
+- **🧠 Show thinking** — sends the raw reasoning text. Long reasoning is split
+  the same way as normal text.
+
+The raw-thinking message ends with:
+
+- **📝 Summarize thinking** — asks OpenCode to summarize that exact reasoning
+  block. It is enabled by default and can be turned off with
+  `show_summarize_thinking` in the plugin.
+
+Every button targets the assistant message that produced the notification, and
+is single-use so repeated taps cannot start multiple generations.
 
 ### Security switches
 
@@ -245,7 +244,6 @@ OpenCode TUI; the plugin asks for confirmation.
 |---|---|---|
 | `allow_custom_form_answers` | `false` | Adds **“Type your own response”** to questions. Without it, only the options offered by the form (or answering inside OpenCode) are possible. |
 | `allow_new_messages` | `false` | Lets free-text Telegram messages become prompts for the chat's bound session. |
-| `allow_resume_thinking` | `false` | Shows the **“Resume thinking”** button and allows it to start an OpenCode turn (or generate a summary). |
 
 They are intentionally **not** exposed as Telegram commands: a compromised
 Telegram session must not be able to grant itself prompt-injection rights.

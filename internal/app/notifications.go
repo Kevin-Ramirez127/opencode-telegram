@@ -119,27 +119,16 @@ func (a *App) notifySession(sessionID, kind, detail string) {
 		full += "\nLast message:\n" + text
 	}
 
-	hasThinking := assistant.HasReasoning()
-	if !hasThinking && hasAssistant && (n.ShowRawThinking || st.Security.AllowResumeThinking) {
-		// The newest message may be text-only while an earlier turn still has
-		// reasoning; only pay for the extra lookup when a button is enabled.
-		if _, ok := a.lastAssistantWithReasoning(sessionID); ok {
-			hasThinking = true
-		}
-	}
-
+	hasThinking := hasAssistant && assistant.HasReasoning()
 	oversized := len(full) > maxTelegramText
-	// In summary mode the on-demand summary button is available for every
-	// notification with a last message, not only the oversized ones.
-	offerSummary := includeText && n.LongMessageMode == "summary"
-	markup := a.notificationMarkup(sessionID, hasThinking, offerSummary)
+	markup := a.notificationMarkup(sessionID, assistant.ID, includeText, hasThinking)
 
 	switch {
 	case !oversized:
 		a.broadcast(full, markup)
-	case offerSummary:
+	case includeText && n.LongMessageMode == "summary":
 		preview := header + "\nLast message:\n" + truncateText(text, 1200) +
-			"\n\n…This message is too long. Tap \"Summarize last message\" for a resume."
+			"\n\n…This message is too long. Tap \"Summarize output\" for a summary."
 		a.broadcast(truncateText(preview, maxTelegramText), markup)
 	case includeText:
 		// One message per assistant text block, with the action buttons on the

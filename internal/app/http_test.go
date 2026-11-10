@@ -97,16 +97,12 @@ func TestSettingsAPIUpdatesDeliveryAndThinking(t *testing.T) {
 	a, srv := testApp(t)
 
 	resp, data := do(t, srv, http.MethodPatch, "/api/plugin/settings",
-		`{"notifications":{"long_message_mode":"summary","show_raw_thinking":true,"resume_thinking_mode":"summary"},`+
-			`"security":{"allow_resume_thinking":true}}`, true)
+		`{"notifications":{"long_message_mode":"summary","show_summarize_thinking":false}}`, true)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("PATCH status = %d (%v)", resp.StatusCode, data)
 	}
 	got := a.settings.Get()
-	if got.Notifications.LongMessageMode != "summary" ||
-		!got.Notifications.ShowRawThinking ||
-		got.Notifications.ResumeThinkingMode != "summary" ||
-		!got.Security.AllowResumeThinking {
+	if got.Notifications.LongMessageMode != "summary" || got.Notifications.ShowSummarizeThinking {
 		t.Fatalf("settings = %+v", got)
 	}
 }

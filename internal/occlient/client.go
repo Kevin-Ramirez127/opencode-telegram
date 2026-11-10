@@ -359,6 +359,16 @@ func (c *Client) ListMessages(ctx context.Context, sessionID string) ([]Message,
 	return out.Data, err
 }
 
+// GetMessage returns one projected message by ID.
+func (c *Client) GetMessage(ctx context.Context, sessionID, messageID string) (Message, error) {
+	var out struct {
+		Data Message `json:"data"`
+	}
+	path := "/api/session/" + url.PathEscape(sessionID) + "/message/" + url.PathEscape(messageID)
+	err := c.do(ctx, http.MethodGet, path, nil, &out)
+	return out.Data, err
+}
+
 // AssistantMessages returns the newest assistant messages, first one first.
 // Asking the server for a descending, assistant-only page avoids downloading
 // the whole transcript just for a notification preview.
@@ -388,22 +398,6 @@ func (c *Client) LastAssistantMessage(ctx context.Context, sessionID string) (Me
 	}
 	for _, m := range messages {
 		if len(m.Content) > 0 {
-			return m, true, nil
-		}
-	}
-	return Message{}, false, nil
-}
-
-// LastAssistantWithReasoning returns the newest assistant message that carries
-// a reasoning/thinking block. A final message sometimes has only text, so the
-// caller may need to look a little further back.
-func (c *Client) LastAssistantWithReasoning(ctx context.Context, sessionID string) (Message, bool, error) {
-	messages, err := c.AssistantMessages(ctx, sessionID, 20)
-	if err != nil {
-		return Message{}, false, err
-	}
-	for _, m := range messages {
-		if m.HasReasoning() {
 			return m, true, nil
 		}
 	}
@@ -462,19 +456,8 @@ func (c *Client) Prompt(ctx context.Context, sessionID, text string) error {
 	}, nil)
 }
 
-// PromptResume admits a prompt and explicitly asks OpenCode to resume the
-// agent loop. It is used by the "Resume thinking" button.
-func (c *Client) PromptResume(ctx context.Context, sessionID, text string) error {
-	path := "/api/session/" + url.PathEscape(sessionID) + "/prompt"
-	return c.do(ctx, http.MethodPost, path, map[string]any{
-		"text":     text,
-		"delivery": "queue",
-		"resume":   true,
-	}, nil)
-}
-
-// Generate asks OpenCode for transient text from the session context. It does
-// not add a user or assistant message to the session history.
+// Generate asks OpenCode for transient text from the session context. It uses
+// the session's configured model and does not add a message to the history.
 func (c *Client) Generate(ctx context.Context, sessionID, prompt string) (string, error) {
 	path := "/api/session/" + url.PathEscape(sessionID) + "/generate"
 	var out struct {
