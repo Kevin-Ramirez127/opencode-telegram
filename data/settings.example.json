@@ -13,7 +13,7 @@
     "notify_chats": [],
     "long_message_mode": "split",
     "show_raw_thinking": false,
-    "resume_thinking_mode": "continue"
+    "resume_thinking_mode": "summary"
   },
   "security": {
     "allow_custom_form_answers": false,

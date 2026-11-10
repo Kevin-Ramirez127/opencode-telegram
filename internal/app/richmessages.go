@@ -60,7 +60,7 @@ func (a *App) notificationMarkup(sessionID string, hasThinking, offerSummary boo
 	if offerSummary {
 		token := a.addAction(action{Kind: "resume_message", SessionID: sessionID})
 		rows = append(rows, []tgbotapi.InlineKeyboardButton{
-			tgbotapi.NewInlineKeyboardButtonData("📄 Ask for resume", callbackData(token)),
+			tgbotapi.NewInlineKeyboardButtonData("📄 Summarize last message", callbackData(token)),
 		})
 	}
 	return tgbotapi.NewInlineKeyboardMarkup(rows...)

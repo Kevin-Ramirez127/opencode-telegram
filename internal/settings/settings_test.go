@@ -20,7 +20,7 @@ func TestDefaultsAreOff(t *testing.T) {
 	if d.Notifications.LongMessageMode != "split" {
 		t.Fatalf("long_message_mode = %q", d.Notifications.LongMessageMode)
 	}
-	if d.Notifications.ResumeThinkingMode != "continue" {
+	if d.Notifications.ResumeThinkingMode != "summary" {
 		t.Fatalf("resume_thinking_mode = %q", d.Notifications.ResumeThinkingMode)
 	}
 }

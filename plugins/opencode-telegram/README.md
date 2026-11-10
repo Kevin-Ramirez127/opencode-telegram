@@ -15,7 +15,7 @@ adds a `/telegram` slash command and a palette command,
 - how oversized responses are delivered: split into one message per text block,
   or a preview with an **Ask for resume** button;
 - whether to show the **Show raw thinking** button, and whether **Resume
-  thinking** should continue the run or summarize the reasoning;
+  thinking** should summarize the reasoning (default) or continue the run;
 - security switches for **custom answers**, **new messages**, and **resume
   thinking** (all off by default);
 - send a test notification.

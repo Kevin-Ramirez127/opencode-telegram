@@ -192,7 +192,7 @@ notifications**). It edits `data/settings.json` through the daemon API:
     "notify_chats": [],
     "long_message_mode": "split",
     "show_raw_thinking": false,
-    "resume_thinking_mode": "continue"
+    "resume_thinking_mode": "summary"
   },
   "security": {
     "allow_custom_form_answers": false,
@@ -216,7 +216,7 @@ daemon does when the last assistant message would not fit:
 | Value | Behavior |
 |---|---|
 | `split` (default) | Send one message per assistant text block. A single oversized block is split at paragraph/line boundaries. Nothing is silently truncated. |
-| `summary` | Send a short preview plus an **“Ask for resume”** button. Pressing it asks OpenCode to summarize the response (`/api/session/{id}/generate`) and sends the resume. |
+| `summary` | Add a **“Summarize last message”** button to notifications. If the message is oversized, send a short preview plus that button instead of splitting it. Pressing the button asks OpenCode to summarize the response (`/api/session/{id}/generate`) and sends the resume. |
 
 ### Thinking buttons
 
@@ -224,16 +224,18 @@ When the latest assistant message carries reasoning, notifications can include:
 
 - **🧠 Show raw thinking** — sends the raw reasoning text (`show_raw_thinking`).
   Long reasoning is split the same way as normal text.
-- **↩️ Resume thinking** — asks OpenCode what to do next, controlled by
+- **↩️ Resume thinking** — summarizes the reasoning, controlled by
   `resume_thinking_mode`:
-  - `continue` (default): send a fixed prompt with `resume: true` so OpenCode
-    continues the run from its previous reasoning;
-  - `summary`: ask OpenCode for a summary of the reasoning and send it.
+  - `summary` (default): ask OpenCode for a summary of the reasoning and send
+    it;
+  - `continue` (optional): send a fixed prompt with `resume: true` so OpenCode
+    continues the run from its previous reasoning.
 
 Both buttons are off by default. Raw thinking is read-only, but “Resume
-thinking” starts an agent turn in `continue` mode, so it also requires the
-`allow_resume_thinking` security switch. Enable the switches from `/telegram`
-in the OpenCode TUI; the plugin asks for confirmation.
+thinking” requires the `allow_resume_thinking` security switch because it calls
+OpenCode. In the default `summary` mode it only generates text; in `continue`
+mode it starts an agent turn. Enable the switches from `/telegram` in the
+OpenCode TUI; the plugin asks for confirmation.
 
 ### Security switches
 

@@ -386,6 +386,29 @@ func TestLongMessageSummaryButton(t *testing.T) {
 	}
 }
 
+func TestSummaryButtonOnNormalMessage(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	mode := "summary"
+	if _, err := a.settings.Patch(settings.Patch{Notifications: &settings.NotificationsPatch{
+		LongMessageMode: &mode,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	foc.lastAssistant = "short message"
+	foc.generated = "short summary"
+
+	a.handleEvent(occlient.Event{
+		Type: "session.execution.succeeded",
+		Data: []byte(`{"sessionID":"ses_1"}`),
+	})
+	token, _ := findAction(t, a, "resume_message", "")
+	a.handleCallback(123, callbackData(token))
+
+	if !strings.Contains(ftg.allText(), "short message") || !strings.Contains(ftg.allText(), "short summary") {
+		t.Fatalf("missing message or summary:\n%s", ftg.allText())
+	}
+}
+
 func TestShowRawThinkingButton(t *testing.T) {
 	a, ftg, foc := newIntegrationApp(t)
 	show := true
@@ -411,9 +434,11 @@ func TestShowRawThinkingButton(t *testing.T) {
 func TestResumeThinkingContinue(t *testing.T) {
 	a, _, foc := newIntegrationApp(t)
 	allow := true
-	if _, err := a.settings.Patch(settings.Patch{Security: &settings.SecurityPatch{
-		AllowResumeThinking: &allow,
-	}}); err != nil {
+	mode := "continue"
+	if _, err := a.settings.Patch(settings.Patch{
+		Security:      &settings.SecurityPatch{AllowResumeThinking: &allow},
+		Notifications: &settings.NotificationsPatch{ResumeThinkingMode: &mode},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	foc.reasoning = "some thinking"

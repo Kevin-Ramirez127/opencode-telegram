@@ -231,7 +231,7 @@ function buildOptions(settings: Settings, status: Status | undefined): Choice[] 
       value: "toggle_long_message_mode",
       description:
         n.long_message_mode === "summary"
-          ? "Send a preview and a button that asks OpenCode for a summary"
+          ? "Add a \"Summarize last message\" button; oversized messages send a preview instead of many blocks"
           : "Send one Telegram message per assistant text block (never truncate)",
     },
     {
@@ -244,7 +244,7 @@ function buildOptions(settings: Settings, status: Status | undefined): Choice[] 
       value: "toggle_resume_thinking_mode",
       description:
         n.resume_thinking_mode === "summary"
-          ? "The button asks OpenCode for a summary of the reasoning"
+          ? "The button asks OpenCode to summarize the reasoning (recommended)"
           : "The button asks OpenCode to continue the run from its reasoning",
     },
     {

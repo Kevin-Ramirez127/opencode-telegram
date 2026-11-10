@@ -129,7 +129,9 @@ func (a *App) notifySession(sessionID, kind, detail string) {
 	}
 
 	oversized := len(full) > maxTelegramText
-	offerSummary := oversized && includeText && n.LongMessageMode == "summary"
+	// In summary mode the on-demand summary button is available for every
+	// notification with a last message, not only the oversized ones.
+	offerSummary := includeText && n.LongMessageMode == "summary"
 	markup := a.notificationMarkup(sessionID, hasThinking, offerSummary)
 
 	switch {
@@ -137,7 +139,7 @@ func (a *App) notifySession(sessionID, kind, detail string) {
 		a.broadcast(full, markup)
 	case offerSummary:
 		preview := header + "\nLast message:\n" + truncateText(text, 1200) +
-			"\n\n…This message is too long. Tap \"Ask for resume\" for a summary."
+			"\n\n…This message is too long. Tap \"Summarize last message\" for a resume."
 		a.broadcast(truncateText(preview, maxTelegramText), markup)
 	case includeText:
 		// One message per assistant text block, with the action buttons on the

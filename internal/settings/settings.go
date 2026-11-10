@@ -38,9 +38,9 @@ type Notifications struct {
 	// ShowRawThinking adds a "Show raw thinking" button to notifications that
 	// carry reasoning, which sends the raw reasoning text.
 	ShowRawThinking bool `json:"show_raw_thinking"`
-	// ResumeThinkingMode controls the "Resume thinking" button: "continue"
-	// asks OpenCode to pick the run back up, while "summary" asks OpenCode for
-	// a summary of the reasoning.
+	// ResumeThinkingMode controls the "Resume thinking" button. "summary"
+	// (default) asks OpenCode for a summary of the reasoning; "continue" asks
+	// OpenCode to pick the run back up instead.
 	ResumeThinkingMode string `json:"resume_thinking_mode"`
 }
 
@@ -79,7 +79,7 @@ func Defaults() Settings {
 			NotifyChats:          []int64{},
 			LongMessageMode:      "split",
 			ShowRawThinking:      false,
-			ResumeThinkingMode:   "continue",
+			ResumeThinkingMode:   "summary",
 		},
 		Security: Security{
 			AllowCustomFormAnswers: false,
@@ -277,7 +277,7 @@ func normalize(s *Settings) {
 	}
 	s.Notifications.ResumeThinkingMode = strings.ToLower(strings.TrimSpace(s.Notifications.ResumeThinkingMode))
 	if s.Notifications.ResumeThinkingMode == "" {
-		s.Notifications.ResumeThinkingMode = "continue"
+		s.Notifications.ResumeThinkingMode = "summary"
 	}
 }
 
