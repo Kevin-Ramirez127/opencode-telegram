@@ -61,12 +61,23 @@ func (f *fakeTelegram) allText() string {
 	return strings.Join(f.texts, "\n---\n")
 }
 
+func (f *fakeTelegram) allTexts() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.texts...)
+}
+
 type fakeOpenCode struct {
 	mu            sync.Mutex
 	formAnswer    map[string]any
 	permission    string
 	sessionTitle  string
 	lastAssistant string
+	lastParts     []string
+	reasoning     string
+	generated     string
+	prompt        string
+	promptResume  bool
 }
 
 func (f *fakeOpenCode) handler(w http.ResponseWriter, r *http.Request) {
@@ -80,15 +91,41 @@ func (f *fakeOpenCode) handler(w http.ResponseWriter, r *http.Request) {
 			"time":     map[string]any{"created": 1, "updated": 61001},
 		}})
 	case r.Method == http.MethodGet && r.URL.Path == "/api/session/ses_1/message":
+		f.mu.Lock()
+		texts := f.lastParts
+		if len(texts) == 0 {
+			texts = []string{f.lastAssistant}
+		}
+		content := make([]any, 0, len(texts)+1)
+		if f.reasoning != "" {
+			content = append(content, map[string]any{"type": "reasoning", "text": f.reasoning})
+		}
+		for _, text := range texts {
+			content = append(content, map[string]any{"type": "text", "text": text})
+		}
+		f.mu.Unlock()
 		writeFakeJSON(w, map[string]any{"data": []any{map[string]any{
-			"id":   "msg_1",
-			"type": "assistant",
-			"time": map[string]any{"created": 2},
-			"content": []any{map[string]any{
-				"type": "text",
-				"text": f.lastAssistant,
-			}},
+			"id":      "msg_1",
+			"type":    "assistant",
+			"time":    map[string]any{"created": 2},
+			"content": content,
 		}}})
+	case r.Method == http.MethodPost && r.URL.Path == "/api/session/ses_1/generate":
+		f.mu.Lock()
+		text := f.generated
+		f.mu.Unlock()
+		writeFakeJSON(w, map[string]any{"data": map[string]any{"text": text}})
+	case r.Method == http.MethodPost && r.URL.Path == "/api/session/ses_1/prompt":
+		var body struct {
+			Text   string `json:"text"`
+			Resume bool   `json:"resume"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.mu.Lock()
+		f.prompt = body.Text
+		f.promptResume = body.Resume
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/session/ses_1/form/"):
 		var body struct {
 			Answer map[string]any `json:"answer"`
@@ -213,15 +250,16 @@ func TestSessionDoneNotificationUTF8(t *testing.T) {
 		Type: "session.execution.succeeded",
 		Data: []byte(`{"sessionID":"ses_1"}`),
 	})
-	text := ftg.lastText()
-	if !utf8.ValidString(text) {
-		t.Fatalf("notification is not valid UTF-8: %q", text)
+	if !strings.Contains(ftg.allText(), "session finished") {
+		t.Fatalf("notification missing heading:\n%s", ftg.allText())
 	}
-	if !strings.Contains(text, "session finished") {
-		t.Fatalf("notification missing heading:\n%s", text)
-	}
-	if len(text) > maxTelegramText {
-		t.Fatalf("notification length = %d, want <= %d", len(text), maxTelegramText)
+	for _, text := range ftg.allTexts() {
+		if !utf8.ValidString(text) {
+			t.Fatalf("notification is not valid UTF-8: %q", text)
+		}
+		if len(text) > maxTelegramText {
+			t.Fatalf("notification length = %d, want <= %d", len(text), maxTelegramText)
+		}
 	}
 }
 
@@ -300,6 +338,123 @@ func TestDoneNotificationSuppressedWhileQuestionPending(t *testing.T) {
 	a.handleEvent(occlient.Event{Type: "session.execution.succeeded", Data: []byte(`{"sessionID":"ses_1"}`)})
 	if !strings.Contains(ftg.allText(), "session finished") {
 		t.Fatal("expected a session-finished notification after the question settled")
+	}
+}
+
+func TestLongMessageSplitsTextBlocks(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	blockA := strings.Repeat("a", 3000)
+	blockB := strings.Repeat("b", 3000)
+	foc.lastParts = []string{blockA, blockB}
+
+	a.handleEvent(occlient.Event{
+		Type: "session.execution.succeeded",
+		Data: []byte(`{"sessionID":"ses_1"}`),
+	})
+
+	all := ftg.allText()
+	if !strings.Contains(all, blockA) || !strings.Contains(all, blockB) {
+		t.Fatalf("split notification lost a text block:\n%s", all)
+	}
+	for _, text := range ftg.allTexts() {
+		if len(text) > maxTelegramText {
+			t.Fatalf("message length = %d, want <= %d", len(text), maxTelegramText)
+		}
+	}
+}
+
+func TestLongMessageSummaryButton(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	mode := "summary"
+	if _, err := a.settings.Patch(settings.Patch{Notifications: &settings.NotificationsPatch{
+		LongMessageMode: &mode,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	foc.lastParts = []string{strings.Repeat("x", 5000)}
+	foc.generated = "short resume"
+
+	a.handleEvent(occlient.Event{
+		Type: "session.execution.succeeded",
+		Data: []byte(`{"sessionID":"ses_1"}`),
+	})
+	token, _ := findAction(t, a, "resume_message", "")
+	a.handleCallback(123, callbackData(token))
+
+	if !strings.Contains(ftg.allText(), "short resume") {
+		t.Fatalf("resume was not delivered:\n%s", ftg.allText())
+	}
+}
+
+func TestShowRawThinkingButton(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	show := true
+	if _, err := a.settings.Patch(settings.Patch{Notifications: &settings.NotificationsPatch{
+		ShowRawThinking: &show,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	foc.reasoning = "raw secret reasoning"
+
+	a.handleEvent(occlient.Event{
+		Type: "session.execution.succeeded",
+		Data: []byte(`{"sessionID":"ses_1"}`),
+	})
+	token, _ := findAction(t, a, "show_thinking", "")
+	a.handleCallback(123, callbackData(token))
+
+	if !strings.Contains(ftg.allText(), "raw secret reasoning") {
+		t.Fatalf("raw thinking was not delivered:\n%s", ftg.allText())
+	}
+}
+
+func TestResumeThinkingContinue(t *testing.T) {
+	a, _, foc := newIntegrationApp(t)
+	allow := true
+	if _, err := a.settings.Patch(settings.Patch{Security: &settings.SecurityPatch{
+		AllowResumeThinking: &allow,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	foc.reasoning = "some thinking"
+
+	a.handleEvent(occlient.Event{
+		Type: "session.execution.succeeded",
+		Data: []byte(`{"sessionID":"ses_1"}`),
+	})
+	token, _ := findAction(t, a, "resume_thinking", "")
+	a.handleCallback(123, callbackData(token))
+
+	foc.mu.Lock()
+	prompt, resumed := foc.prompt, foc.promptResume
+	foc.mu.Unlock()
+	if !resumed || !strings.Contains(prompt, "Continue") {
+		t.Fatalf("resume prompt = %q resume=%v", prompt, resumed)
+	}
+}
+
+func TestResumeThinkingSummary(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	allow := true
+	mode := "summary"
+	if _, err := a.settings.Patch(settings.Patch{
+		Security:      &settings.SecurityPatch{AllowResumeThinking: &allow},
+		Notifications: &settings.NotificationsPatch{ResumeThinkingMode: &mode},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	foc.reasoning = "some thinking"
+	foc.generated = "thinking summary"
+
+	a.handleEvent(occlient.Event{
+		Type: "session.execution.succeeded",
+		Data: []byte(`{"sessionID":"ses_1"}`),
+	})
+	token, _ := findAction(t, a, "resume_thinking", "")
+	a.handleCallback(123, callbackData(token))
+
+	if !strings.Contains(ftg.allText(), "thinking summary") {
+		t.Fatalf("thinking summary was not delivered:\n%s", ftg.allText())
 	}
 }
 

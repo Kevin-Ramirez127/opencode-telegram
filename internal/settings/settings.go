@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +30,18 @@ type Notifications struct {
 	IncludeLastMessage   bool    `json:"include_last_message"`
 	IncludeDirectory     bool    `json:"include_directory"`
 	NotifyChats          []int64 `json:"notify_chats"`
+
+	// LongMessageMode decides what happens when a notification would exceed
+	// Telegram's 4096-byte limit. "split" sends one message per assistant text
+	// block; "summary" sends a short preview plus an on-demand summary button.
+	LongMessageMode string `json:"long_message_mode"`
+	// ShowRawThinking adds a "Show raw thinking" button to notifications that
+	// carry reasoning, which sends the raw reasoning text.
+	ShowRawThinking bool `json:"show_raw_thinking"`
+	// ResumeThinkingMode controls the "Resume thinking" button: "continue"
+	// asks OpenCode to pick the run back up, while "summary" asks OpenCode for
+	// a summary of the reasoning.
+	ResumeThinkingMode string `json:"resume_thinking_mode"`
 }
 
 // Security controls actions that can inject arbitrary content into OpenCode.
@@ -37,6 +50,9 @@ type Notifications struct {
 type Security struct {
 	AllowCustomFormAnswers bool `json:"allow_custom_form_answers"`
 	AllowNewMessages       bool `json:"allow_new_messages"`
+	// AllowResumeThinking lets Telegram ask OpenCode to resume a run or
+	// summarize its thinking. It stays off until the operator opts in.
+	AllowResumeThinking bool `json:"allow_resume_thinking"`
 }
 
 type Settings struct {
@@ -61,10 +77,14 @@ func Defaults() Settings {
 			IncludeLastMessage:   true,
 			IncludeDirectory:     true,
 			NotifyChats:          []int64{},
+			LongMessageMode:      "split",
+			ShowRawThinking:      false,
+			ResumeThinkingMode:   "continue",
 		},
 		Security: Security{
 			AllowCustomFormAnswers: false,
 			AllowNewMessages:       false,
+			AllowResumeThinking:    false,
 		},
 	}
 }
@@ -87,11 +107,15 @@ type NotificationsPatch struct {
 	IncludeLastMessage   *bool    `json:"include_last_message,omitempty"`
 	IncludeDirectory     *bool    `json:"include_directory,omitempty"`
 	NotifyChats          *[]int64 `json:"notify_chats,omitempty"`
+	LongMessageMode      *string  `json:"long_message_mode,omitempty"`
+	ShowRawThinking      *bool    `json:"show_raw_thinking,omitempty"`
+	ResumeThinkingMode   *string  `json:"resume_thinking_mode,omitempty"`
 }
 
 type SecurityPatch struct {
 	AllowCustomFormAnswers *bool `json:"allow_custom_form_answers,omitempty"`
 	AllowNewMessages       *bool `json:"allow_new_messages,omitempty"`
+	AllowResumeThinking    *bool `json:"allow_resume_thinking,omitempty"`
 }
 
 // Store is a concurrency-safe settings file.
@@ -220,6 +244,15 @@ func applyNotifications(dst *Notifications, p *NotificationsPatch) {
 	if p.NotifyChats != nil {
 		dst.NotifyChats = append([]int64(nil), (*p.NotifyChats)...)
 	}
+	if p.LongMessageMode != nil {
+		dst.LongMessageMode = *p.LongMessageMode
+	}
+	if p.ShowRawThinking != nil {
+		dst.ShowRawThinking = *p.ShowRawThinking
+	}
+	if p.ResumeThinkingMode != nil {
+		dst.ResumeThinkingMode = *p.ResumeThinkingMode
+	}
 }
 
 func applySecurity(dst *Security, p *SecurityPatch) {
@@ -229,15 +262,36 @@ func applySecurity(dst *Security, p *SecurityPatch) {
 	if p.AllowNewMessages != nil {
 		dst.AllowNewMessages = *p.AllowNewMessages
 	}
+	if p.AllowResumeThinking != nil {
+		dst.AllowResumeThinking = *p.AllowResumeThinking
+	}
 }
 
 func normalize(s *Settings) {
 	if s.Notifications.NotifyChats == nil {
 		s.Notifications.NotifyChats = []int64{}
 	}
+	s.Notifications.LongMessageMode = strings.ToLower(strings.TrimSpace(s.Notifications.LongMessageMode))
+	if s.Notifications.LongMessageMode == "" {
+		s.Notifications.LongMessageMode = "split"
+	}
+	s.Notifications.ResumeThinkingMode = strings.ToLower(strings.TrimSpace(s.Notifications.ResumeThinkingMode))
+	if s.Notifications.ResumeThinkingMode == "" {
+		s.Notifications.ResumeThinkingMode = "continue"
+	}
 }
 
 func validate(s Settings) error {
+	switch s.Notifications.LongMessageMode {
+	case "split", "summary":
+	default:
+		return fmt.Errorf("long_message_mode must be \"split\" or \"summary\"")
+	}
+	switch s.Notifications.ResumeThinkingMode {
+	case "continue", "summary":
+	default:
+		return fmt.Errorf("resume_thinking_mode must be \"continue\" or \"summary\"")
+	}
 	if len(s.Notifications.NotifyChats) > 50 {
 		return fmt.Errorf("notify_chats may contain at most 50 chats")
 	}

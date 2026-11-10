@@ -189,11 +189,15 @@ notifications**). It edits `data/settings.json` through the daemon API:
     "include_child_sessions": false,
     "include_last_message": true,
     "include_directory": true,
-    "notify_chats": []
+    "notify_chats": [],
+    "long_message_mode": "split",
+    "show_raw_thinking": false,
+    "resume_thinking_mode": "continue"
   },
   "security": {
     "allow_custom_form_answers": false,
-    "allow_new_messages": false
+    "allow_new_messages": false,
+    "allow_resume_thinking": false
   }
 }
 ```
@@ -204,12 +208,40 @@ allowlisted; the API rejects anything else.
 `include_child_sessions` is off by default: subagent/child sessions finish
 often and usually should not page you.
 
+### Long messages
+
+Telegram rejects messages over 4096 bytes. `long_message_mode` decides what the
+daemon does when the last assistant message would not fit:
+
+| Value | Behavior |
+|---|---|
+| `split` (default) | Send one message per assistant text block. A single oversized block is split at paragraph/line boundaries. Nothing is silently truncated. |
+| `summary` | Send a short preview plus an **“Ask for resume”** button. Pressing it asks OpenCode to summarize the response (`/api/session/{id}/generate`) and sends the resume. |
+
+### Thinking buttons
+
+When the latest assistant message carries reasoning, notifications can include:
+
+- **🧠 Show raw thinking** — sends the raw reasoning text (`show_raw_thinking`).
+  Long reasoning is split the same way as normal text.
+- **↩️ Resume thinking** — asks OpenCode what to do next, controlled by
+  `resume_thinking_mode`:
+  - `continue` (default): send a fixed prompt with `resume: true` so OpenCode
+    continues the run from its previous reasoning;
+  - `summary`: ask OpenCode for a summary of the reasoning and send it.
+
+Both buttons are off by default. Raw thinking is read-only, but “Resume
+thinking” starts an agent turn in `continue` mode, so it also requires the
+`allow_resume_thinking` security switch. Enable the switches from `/telegram`
+in the OpenCode TUI; the plugin asks for confirmation.
+
 ### Security switches
 
 | Setting | Default | Effect |
 |---|---|---|
 | `allow_custom_form_answers` | `false` | Adds **“Type your own response”** to questions. Without it, only the options offered by the form (or answering inside OpenCode) are possible. |
 | `allow_new_messages` | `false` | Lets free-text Telegram messages become prompts for the chat's bound session. |
+| `allow_resume_thinking` | `false` | Shows the **“Resume thinking”** button and allows it to start an OpenCode turn (or generate a summary). |
 
 They are intentionally **not** exposed as Telegram commands: a compromised
 Telegram session must not be able to grant itself prompt-injection rights.

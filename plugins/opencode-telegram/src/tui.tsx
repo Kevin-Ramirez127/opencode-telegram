@@ -3,6 +3,9 @@ import type { Context } from "@opencode/plugin/tui/context"
 
 const DEFAULT_DAEMON = "http://127.0.0.1:8787"
 
+type LongMessageMode = "split" | "summary"
+type ResumeThinkingMode = "continue" | "summary"
+
 type Notifications = {
   enabled: boolean
   session_done: boolean
@@ -15,11 +18,15 @@ type Notifications = {
   include_last_message: boolean
   include_directory: boolean
   notify_chats: number[]
+  long_message_mode: LongMessageMode
+  show_raw_thinking: boolean
+  resume_thinking_mode: ResumeThinkingMode
 }
 
 type Security = {
   allow_custom_form_answers: boolean
   allow_new_messages: boolean
+  allow_resume_thinking: boolean
 }
 
 type Settings = {
@@ -140,12 +147,22 @@ async function toggleSecurity(
   enable: boolean,
 ): Promise<boolean> {
   if (enable) {
+    let title = "Allow custom answers?"
+    let message =
+      "This adds a \"Type your own response\" option to OpenCode questions, allowing arbitrary text to be sent back into a form. Only enable it if you trust every account and device that can reach this bot."
+    if (key === "allow_new_messages") {
+      title = "Allow new messages?"
+      message =
+        "This lets any allowlisted Telegram user send arbitrary prompts to the OpenCode session bound to their chat. Only enable it if you trust every account and device that can reach this bot."
+    }
+    if (key === "allow_resume_thinking") {
+      title = "Allow resuming thinking?"
+      message =
+        "This lets Telegram ask OpenCode to resume the current run or summarize its reasoning. In continue mode the fixed prompt starts a new agent turn, which may run tools. Only enable it if you trust every account and device that can reach this bot."
+    }
     const confirm = await context.ui.dialog.confirm({
-      title: key === "allow_new_messages" ? "Allow new messages?" : "Allow custom answers?",
-      message:
-        key === "allow_new_messages"
-          ? "This lets any allowlisted Telegram user send arbitrary prompts to the OpenCode session bound to their chat. Only enable it if you trust every account and device that can reach this bot."
-          : "This adds a \"Type your own response\" option to OpenCode questions, allowing arbitrary text to be sent back into a form. Only enable it if you trust every account and device that can reach this bot.",
+      title,
+      message,
       label: { confirm: "Enable", cancel: "Cancel" },
     })
     if (!confirm) return false
@@ -210,6 +227,27 @@ function buildOptions(settings: Settings, status: Status | undefined): Choice[] 
       description: "Show the session working directory",
     },
     {
+      title: `Long messages: ${n.long_message_mode === "summary" ? "ask for a resume" : "split into blocks"}`,
+      value: "toggle_long_message_mode",
+      description:
+        n.long_message_mode === "summary"
+          ? "Send a preview and a button that asks OpenCode for a summary"
+          : "Send one Telegram message per assistant text block (never truncate)",
+    },
+    {
+      title: `Show raw thinking button ${stateLabel(n.show_raw_thinking)}`,
+      value: "toggle_show_raw_thinking",
+      description: "Add \"Show raw thinking\" to notifications that contain reasoning; off by default",
+    },
+    {
+      title: `Resume thinking: ${n.resume_thinking_mode}`,
+      value: "toggle_resume_thinking_mode",
+      description:
+        n.resume_thinking_mode === "summary"
+          ? "The button asks OpenCode for a summary of the reasoning"
+          : "The button asks OpenCode to continue the run from its reasoning",
+    },
+    {
       title: `Security: custom answers ${stateLabel(s.allow_custom_form_answers)}`,
       value: "toggle_custom_answers",
       description: "Adds \"Type your own response\" to questions; off by default",
@@ -218,6 +256,11 @@ function buildOptions(settings: Settings, status: Status | undefined): Choice[] 
       title: `Security: new messages ${stateLabel(s.allow_new_messages)}`,
       value: "toggle_new_messages",
       description: "Allow free-text Telegram messages to become OpenCode prompts; off by default",
+    },
+    {
+      title: `Security: resume thinking ${stateLabel(s.allow_resume_thinking)}`,
+      value: "toggle_resume_thinking",
+      description: "Show the \"Resume thinking\" button; off by default",
     },
     {
       title: "Send a test notification",
@@ -248,12 +291,33 @@ async function handleChoice(context: Context, value: string): Promise<boolean> {
     case "toggle_retry":
     case "toggle_include_child_sessions":
     case "toggle_include_last_message":
-    case "toggle_include_directory": {
+    case "toggle_include_directory":
+    case "toggle_show_raw_thinking": {
       const key = value.replace("toggle_", "") as keyof Notifications
       const data = await load(context)
       const current = data.settings.notifications[key]
       if (typeof current !== "boolean") return true
       await patchNotifications(context, { [key]: !current } as Partial<Notifications>)
+      return true
+    }
+    case "toggle_long_message_mode": {
+      const data = await load(context)
+      const next: LongMessageMode =
+        data.settings.notifications.long_message_mode === "summary" ? "split" : "summary"
+      await patchNotifications(context, { long_message_mode: next })
+      return true
+    }
+    case "toggle_resume_thinking_mode": {
+      const data = await load(context)
+      const next: ResumeThinkingMode =
+        data.settings.notifications.resume_thinking_mode === "summary" ? "continue" : "summary"
+      await patchNotifications(context, { resume_thinking_mode: next })
+      return true
+    }
+    case "toggle_resume_thinking": {
+      const data = await load(context)
+      const current = data.settings.security.allow_resume_thinking
+      await toggleSecurity(context, "allow_resume_thinking", !current)
       return true
     }
     case "toggle_custom_answers": {

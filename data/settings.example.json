@@ -10,10 +10,14 @@
     "include_child_sessions": false,
     "include_last_message": true,
     "include_directory": true,
-    "notify_chats": []
+    "notify_chats": [],
+    "long_message_mode": "split",
+    "show_raw_thinking": false,
+    "resume_thinking_mode": "continue"
   },
   "security": {
     "allow_custom_form_answers": false,
-    "allow_new_messages": false
+    "allow_new_messages": false,
+    "allow_resume_thinking": false
   }
 }

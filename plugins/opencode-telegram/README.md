@@ -12,8 +12,12 @@ adds a `/telegram` slash command and a palette command,
   permissions, retry status;
 - whether to include child/subagent sessions, the last assistant message, and
   the working directory;
-- security switches for **custom answers** and **new messages** (both off by
-  default);
+- how oversized responses are delivered: split into one message per text block,
+  or a preview with an **Ask for resume** button;
+- whether to show the **Show raw thinking** button, and whether **Resume
+  thinking** should continue the run or summarize the reasoning;
+- security switches for **custom answers**, **new messages**, and **resume
+  thinking** (all off by default);
 - send a test notification.
 
 Every change is applied immediately through the daemon's loopback API.
@@ -26,6 +30,7 @@ OpenCode Telegram deliberately separates *notifications* from *actions*:
 |---|---|---|
 | `allow_custom_form_answers` | off | Adds **“Type your own response”** to OpenCode questions, so arbitrary text can be sent back into a form. |
 | `allow_new_messages` | off | Lets free-text Telegram messages become prompts for the session bound to that chat. |
+| `allow_resume_thinking` | off | Shows the **“Resume thinking”** button. In `continue` mode it starts a fixed OpenCode turn; in `summary` mode it only generates a summary. |
 
 These are the only ways Telegram can inject content into OpenCode. If you do
 not fully trust every Telegram account and device with access to the bot, leave

@@ -346,10 +346,14 @@ func (a *App) showSettings(chatID int64) {
 		fmt.Sprintf("Retry status: %s", onOff(st.Retry)),
 		fmt.Sprintf("Include last message: %s", onOff(st.IncludeLastMessage)),
 		fmt.Sprintf("Include directory: %s", onOff(st.IncludeDirectory)),
+		fmt.Sprintf("Long messages: %s", st.LongMessageMode),
+		fmt.Sprintf("Show raw thinking button: %s", onOff(st.ShowRawThinking)),
+		fmt.Sprintf("Resume thinking mode: %s", st.ResumeThinkingMode),
 		"",
 		"Security (change these from the OpenCode plugin, not Telegram):",
 		fmt.Sprintf("Allow custom question answers: %s", onOff(sec.AllowCustomFormAnswers)),
 		fmt.Sprintf("Allow new messages: %s", onOff(sec.AllowNewMessages)),
+		fmt.Sprintf("Allow resume thinking: %s", onOff(sec.AllowResumeThinking)),
 		"",
 		"Use /notify on|off to toggle delivery.",
 	}, "\n")
@@ -403,6 +407,12 @@ func (a *App) handleCallback(chatID int64, data string) {
 	case "bind_reply":
 		a.setBinding(chatID, act.SessionID)
 		a.send(chatID, fmt.Sprintf("🔗 Bound to %s.\nType your message now.", a.sessionLabel(act.SessionID)))
+	case "show_thinking":
+		a.showRawThinking(chatID, act)
+	case "resume_thinking":
+		a.resumeThinking(chatID, act)
+	case "resume_message":
+		a.resumeMessage(chatID, act)
 	case "unbind":
 		a.setBinding(chatID, "")
 		a.send(chatID, "🔓 Unbound.")

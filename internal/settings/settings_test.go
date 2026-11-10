@@ -11,11 +11,60 @@ func TestDefaultsAreOff(t *testing.T) {
 	if d.Notifications.Enabled {
 		t.Fatal("notifications must be off by default")
 	}
-	if d.Security.AllowCustomFormAnswers || d.Security.AllowNewMessages {
+	if d.Security.AllowCustomFormAnswers || d.Security.AllowNewMessages || d.Security.AllowResumeThinking {
 		t.Fatal("security overrides must be off by default")
 	}
 	if !d.Notifications.SessionDone || !d.Notifications.QuestionAsked {
 		t.Fatal("individual notification types should default to on")
+	}
+	if d.Notifications.LongMessageMode != "split" {
+		t.Fatalf("long_message_mode = %q", d.Notifications.LongMessageMode)
+	}
+	if d.Notifications.ResumeThinkingMode != "continue" {
+		t.Fatalf("resume_thinking_mode = %q", d.Notifications.ResumeThinkingMode)
+	}
+}
+
+func TestPatchLongMessageAndThinking(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "settings.json")
+	s, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mode := "summary"
+	thinkMode := "summary"
+	show := true
+	allow := true
+	next, err := s.Patch(Patch{
+		Notifications: &NotificationsPatch{
+			LongMessageMode:    &mode,
+			ResumeThinkingMode: &thinkMode,
+			ShowRawThinking:    &show,
+		},
+		Security: &SecurityPatch{AllowResumeThinking: &allow},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.Notifications.LongMessageMode != "summary" ||
+		next.Notifications.ResumeThinkingMode != "summary" ||
+		!next.Notifications.ShowRawThinking || !next.Security.AllowResumeThinking {
+		t.Fatalf("patch not applied: %+v", next)
+	}
+}
+
+func TestRejectUnknownLongMessageMode(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "settings.json")
+	s, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := "sometimes"
+	if _, err := s.Patch(Patch{Notifications: &NotificationsPatch{LongMessageMode: &bad}}); err == nil {
+		t.Fatal("unknown long message mode must be rejected")
+	}
+	if _, err := s.Patch(Patch{Notifications: &NotificationsPatch{ResumeThinkingMode: &bad}}); err == nil {
+		t.Fatal("unknown resume thinking mode must be rejected")
 	}
 }
 

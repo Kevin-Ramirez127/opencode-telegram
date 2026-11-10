@@ -105,21 +105,56 @@ func (a *App) notifySession(sessionID, kind, detail string) {
 		fmt.Fprintf(&b, "\nError: %s\n", truncateText(detail, 1200))
 	}
 
-	if n.IncludeLastMessage && kind != "failed" {
-		if text := a.lastAssistantText(sessionID); text != "" {
-			fmt.Fprintf(&b, "\nLast message:\n%s\n", truncateText(text, 1200))
+	header := b.String()
+	assistant, hasAssistant := a.lastAssistantMessage(sessionID)
+	var textParts []string
+	if hasAssistant {
+		textParts = assistant.TextParts()
+	}
+	includeText := n.IncludeLastMessage && kind != "failed" && len(textParts) > 0
+	text := strings.Join(textParts, "\n\n")
+
+	full := header
+	if includeText {
+		full += "\nLast message:\n" + text
+	}
+
+	hasThinking := assistant.HasReasoning()
+	if !hasThinking && hasAssistant && (n.ShowRawThinking || st.Security.AllowResumeThinking) {
+		// The newest message may be text-only while an earlier turn still has
+		// reasoning; only pay for the extra lookup when a button is enabled.
+		if _, ok := a.lastAssistantWithReasoning(sessionID); ok {
+			hasThinking = true
 		}
 	}
 
-	var markup tgbotapi.InlineKeyboardMarkup
-	if a.settings.Get().Security.AllowNewMessages {
-		token := a.addAction(action{Kind: "bind_reply", SessionID: sessionID})
-		markup = tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{
-			tgbotapi.NewInlineKeyboardButtonData("Reply to this session", callbackData(token)),
-		})
-	}
+	oversized := len(full) > maxTelegramText
+	offerSummary := oversized && includeText && n.LongMessageMode == "summary"
+	markup := a.notificationMarkup(sessionID, hasThinking, offerSummary)
 
-	a.broadcast(b.String(), markup)
+	switch {
+	case !oversized:
+		a.broadcast(full, markup)
+	case offerSummary:
+		preview := header + "\nLast message:\n" + truncateText(text, 1200) +
+			"\n\n…This message is too long. Tap \"Ask for resume\" for a summary."
+		a.broadcast(truncateText(preview, maxTelegramText), markup)
+	case includeText:
+		// One message per assistant text block, with the action buttons on the
+		// final part.
+		parts := contentMessages(header, textParts)
+		out := make([]outgoingMessage, 0, len(parts))
+		for i, part := range parts {
+			partMarkup := tgbotapi.InlineKeyboardMarkup{}
+			if i == len(parts)-1 {
+				partMarkup = markup
+			}
+			out = append(out, outgoingMessage{Text: part, Markup: partMarkup})
+		}
+		a.broadcastParts(out)
+	default:
+		a.broadcast(truncateText(full, maxTelegramText), markup)
+	}
 	a.finishRun(sessionID, kind, true)
 }
 
@@ -178,17 +213,6 @@ func (a *App) fetchSession(sessionID string) (occlient.Session, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	return a.oc.GetSession(ctx, sessionID)
-}
-
-func (a *App) lastAssistantText(sessionID string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	text, err := a.oc.LastAssistantText(ctx, sessionID)
-	if err != nil {
-		log.Printf("notification: could not read messages for %s: %v", sessionID, err)
-		return ""
-	}
-	return text
 }
 
 func sessionDuration(s occlient.Session) string {
