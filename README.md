@@ -373,7 +373,37 @@ make vet
 make fmt
 make run         # foreground
 make check       # validate config + connectivity
+make simulate    # send premade conversations to Telegram
 ```
+
+### Simulating Telegram output
+
+The simulator sends real, premade OpenCode conversations to the allowlisted
+Telegram chats without creating an OpenCode session:
+
+```bash
+./scripts/simulate.sh list          # scenario names
+./scripts/simulate.sh               # everything
+./scripts/simulate.sh text          # rich Markdown formatting
+./scripts/simulate.sh done          # finished-session notification
+./scripts/simulate.sh question1     # question with 1 field
+./scripts/simulate.sh question2     # question with 2 fields
+./scripts/simulate.sh question3     # question with 3 fields
+./scripts/simulate.sh permission    # permission request
+./scripts/simulate.sh text,done     # comma-separated scenarios
+```
+
+The installed command exposes the same thing:
+
+```bash
+opencode-telegram simulate question3
+```
+
+Question, permission, thinking, and summary buttons stay active while the
+simulator process runs. Stop the real daemon first: Telegram delivers each
+update to only one poller, so a running daemon would consume the simulated
+button presses. The simulator uses a temporary settings file and a fake
+OpenCode API, so it never changes your real settings or session state.
 
 Layout:
 
@@ -389,7 +419,8 @@ internal/safeio             atomic 0600 writes
 plugins/opencode-telegram   OpenCode TUI settings plugin
 data/*.example.json         tracked allowlist/settings templates
 data/*.json                 local state (gitignored)
-scripts/daemon.sh           start/stop/logs/config/settings
+scripts/daemon.sh           start/stop/logs/config/settings/simulate
+scripts/simulate.sh         premade Telegram QA conversations
 packaging/                  systemd user unit
 ```
 
