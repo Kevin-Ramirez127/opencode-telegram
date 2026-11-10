@@ -223,7 +223,9 @@ daemon does when the last assistant message would not fit:
 When the latest assistant message carries reasoning, notifications can include:
 
 - **🧠 Show raw thinking** — sends the raw reasoning text (`show_raw_thinking`).
-  Long reasoning is split the same way as normal text.
+  Long reasoning is split the same way as normal text. The raw thinking message
+  includes a **📝 Summarize thinking** button that generates a summary on
+  demand.
 - **↩️ Resume thinking** — summarizes the reasoning, controlled by
   `resume_thinking_mode`:
   - `summary` (default): ask OpenCode for a summary of the reasoning and send

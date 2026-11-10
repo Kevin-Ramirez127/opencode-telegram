@@ -409,6 +409,8 @@ func (a *App) handleCallback(chatID int64, data string) {
 		a.send(chatID, fmt.Sprintf("🔗 Bound to %s.\nType your message now.", a.sessionLabel(act.SessionID)))
 	case "show_thinking":
 		a.showRawThinking(chatID, act)
+	case "summarize_thinking":
+		a.summarizeThinking(chatID, act)
 	case "resume_thinking":
 		a.resumeThinking(chatID, act)
 	case "resume_message":

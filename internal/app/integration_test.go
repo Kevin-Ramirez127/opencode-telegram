@@ -431,6 +431,34 @@ func TestShowRawThinkingButton(t *testing.T) {
 	}
 }
 
+func TestRawThinkingOffersSummarizeButton(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	show := true
+	if _, err := a.settings.Patch(settings.Patch{Notifications: &settings.NotificationsPatch{
+		ShowRawThinking: &show,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	foc.reasoning = "raw reasoning to summarize"
+	foc.generated = "summarized thinking"
+
+	a.handleEvent(occlient.Event{
+		Type: "session.execution.succeeded",
+		Data: []byte(`{"sessionID":"ses_1"}`),
+	})
+	showToken, _ := findAction(t, a, "show_thinking", "")
+	a.handleCallback(123, callbackData(showToken))
+	if !strings.Contains(ftg.allText(), "raw reasoning to summarize") {
+		t.Fatalf("raw thinking was not delivered:\n%s", ftg.allText())
+	}
+
+	sumToken, _ := findAction(t, a, "summarize_thinking", "")
+	a.handleCallback(123, callbackData(sumToken))
+	if !strings.Contains(ftg.allText(), "summarized thinking") {
+		t.Fatalf("thinking summary was not delivered:\n%s", ftg.allText())
+	}
+}
+
 func TestResumeThinkingContinue(t *testing.T) {
 	a, _, foc := newIntegrationApp(t)
 	allow := true

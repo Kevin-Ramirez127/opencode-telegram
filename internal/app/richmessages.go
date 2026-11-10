@@ -88,7 +88,17 @@ func (a *App) broadcastParts(parts []outgoingMessage) []sentMessage {
 
 // sendPartsToChat sends a sequence of already-split parts to one chat.
 func (a *App) sendPartsToChat(chatID int64, parts []string) {
-	for _, part := range parts {
+	a.sendPartsToChatWithMarkup(chatID, parts, tgbotapi.InlineKeyboardMarkup{})
+}
+
+// sendPartsToChatWithMarkup sends parts to one chat and attaches markup to the
+// final part only.
+func (a *App) sendPartsToChatWithMarkup(chatID int64, parts []string, markup tgbotapi.InlineKeyboardMarkup) {
+	for i, part := range parts {
+		if i == len(parts)-1 {
+			a.sendMarkup(chatID, part, markup)
+			continue
+		}
 		a.send(chatID, part)
 	}
 }
@@ -189,7 +199,28 @@ func (a *App) showRawThinking(chatID int64, act action) {
 		return
 	}
 	header := fmt.Sprintf("🧠 Raw thinking\nSession: %s", a.sessionLabel(act.SessionID))
-	a.sendPartsToChat(chatID, contentMessages(header, msg.ReasoningParts()))
+	token := a.addAction(action{Kind: "summarize_thinking", SessionID: act.SessionID})
+	markup := tgbotapi.NewInlineKeyboardMarkup([]tgbotapi.InlineKeyboardButton{
+		tgbotapi.NewInlineKeyboardButtonData("📝 Summarize thinking", callbackData(token)),
+	})
+	a.sendPartsToChatWithMarkup(chatID, contentMessages(header, msg.ReasoningParts()), markup)
+}
+
+// summarizeThinking asks OpenCode for a summary of the reasoning and sends it.
+// It is the default "Resume thinking" action and is also offered directly on
+// raw thinking messages.
+func (a *App) summarizeThinking(chatID int64, act action) {
+	text, err := a.generateText(act.SessionID, thinkingSummaryPrompt)
+	if err != nil {
+		a.send(chatID, fmt.Sprintf("❌ Could not summarize the thinking: %v", err))
+		return
+	}
+	if text == "" {
+		a.send(chatID, "OpenCode returned an empty summary.")
+		return
+	}
+	header := fmt.Sprintf("🧠 Thinking resume\nSession: %s", a.sessionLabel(act.SessionID))
+	a.sendPartsToChat(chatID, contentMessages(header, []string{text}))
 }
 
 // resumeThinking asks OpenCode either to continue the run or to summarize the
@@ -206,17 +237,7 @@ func (a *App) resumeThinking(chatID int64, act action) {
 	}
 
 	if st.Notifications.ResumeThinkingMode == "summary" {
-		text, err := a.generateText(act.SessionID, thinkingSummaryPrompt)
-		if err != nil {
-			a.send(chatID, fmt.Sprintf("❌ Could not summarize the thinking: %v", err))
-			return
-		}
-		if text == "" {
-			a.send(chatID, "OpenCode returned an empty summary.")
-			return
-		}
-		header := fmt.Sprintf("🧠 Thinking resume\nSession: %s", a.sessionLabel(act.SessionID))
-		a.sendPartsToChat(chatID, contentMessages(header, []string{text}))
+		a.summarizeThinking(chatID, act)
 		return
 	}
 
