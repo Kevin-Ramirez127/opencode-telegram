@@ -103,7 +103,7 @@ func (a *App) commandPowerOff(chatID int64) {
 }
 
 func (a *App) confirmDaemonExit(chatID int64, messageID int) {
-	text := "🛑 Stopping the opencode-telegram daemon…"
+	text := "✅ opencode-telegram daemon stopped."
 	if messageID > 0 {
 		a.editMarkup(chatID, messageID, text, nil)
 	} else {
@@ -130,16 +130,24 @@ func (a *App) confirmPowerOff(chatID int64, messageID int) {
 			} else {
 				a.send(chatID, msg)
 			}
+			return
+		}
+		msg := "✅ Poweroff executed successfully."
+		if messageID > 0 {
+			a.editMarkup(chatID, messageID, msg, nil)
+		} else {
+			a.send(chatID, msg)
 		}
 	}()
 }
 
 func (a *App) cancelConfirmation(chatID int64, messageID int) {
+	text := "🛑 Operation aborted. Nothing was changed."
 	if messageID > 0 {
-		a.editMarkup(chatID, messageID, "Cancelled.", nil)
+		a.editMarkup(chatID, messageID, text, nil)
 		return
 	}
-	a.send(chatID, "Cancelled.")
+	a.send(chatID, text)
 }
 
 // systemPowerOff tries the usual Linux power-off interfaces without going
