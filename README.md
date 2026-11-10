@@ -290,8 +290,9 @@ confirmation button is pressed. Cancel buttons dismiss the request.
 `/agents` lists the primary agents for the bound session and lets you switch
 with a button (or pass an agent id directly). `/models` lists every enabled
 chat model with one switch button per model, marking the model currently
-selected for the bound session. Finished-session notifications include an
-`Agent:` line showing the agent that handled the run.
+selected for the bound session. Both commands show a temporary loading message
+if the OpenCode API takes longer than 250 ms. Finished-session notifications
+include an `Agent:` line showing the agent that handled the run.
 
 The daemon also adds its commands to the bot menu if they are missing. Existing
 bot commands are preserved, so commands registered with BotFather are not

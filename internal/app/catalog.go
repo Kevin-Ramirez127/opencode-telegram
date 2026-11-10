@@ -17,11 +17,13 @@ func (a *App) showAgents(chatID int64) {
 		a.send(chatID, "No session bound. Send /sessions to pick one.")
 		return
 	}
+	stopLoading := a.startDelayedLoading(chatID, "⏳ Loading agents…", 250*time.Millisecond)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	sess, err := a.oc.GetSession(ctx, sessionID)
 	if err != nil {
+		stopLoading()
 		a.send(chatID, fmt.Sprintf("❌ Could not read session %s: %v", sessionID, err))
 		return
 	}
@@ -29,6 +31,7 @@ func (a *App) showAgents(chatID int64) {
 
 	agents, err := a.oc.ListAgents(ctx, sess.Location.Directory)
 	if err != nil {
+		stopLoading()
 		a.send(chatID, fmt.Sprintf("❌ Could not list agents: %v", err))
 		return
 	}
@@ -52,6 +55,7 @@ func (a *App) showAgents(chatID int64) {
 		}
 	}
 	if len(switchable) == 0 {
+		stopLoading()
 		a.send(chatID, "No switchable agents found.")
 		return
 	}
@@ -81,6 +85,7 @@ func (a *App) showAgents(chatID int64) {
 			tgbotapi.NewInlineKeyboardButtonData(truncateOneLine(label, 60), callbackData(token)),
 		})
 	}
+	stopLoading()
 	a.sendMarkup(chatID, b.String(), tgbotapi.NewInlineKeyboardMarkup(rows...))
 }
 
@@ -126,12 +131,14 @@ func (a *App) showModels(chatID int64) {
 		a.send(chatID, "No session bound. Send /sessions to pick one.")
 		return
 	}
+	stopLoading := a.startDelayedLoading(chatID, "⏳ Loading models…", 250*time.Millisecond)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	sess, err := a.oc.GetSession(ctx, sessionID)
 	if err != nil {
+		stopLoading()
 		a.send(chatID, fmt.Sprintf("❌ Could not read session %s: %v", sessionID, err))
 		return
 	}
@@ -139,6 +146,7 @@ func (a *App) showModels(chatID int64) {
 
 	models, err := a.oc.ListModels(ctx, sess.Location.Directory)
 	if err != nil {
+		stopLoading()
 		a.send(chatID, fmt.Sprintf("❌ Could not list models: %v", err))
 		return
 	}
@@ -154,6 +162,7 @@ func (a *App) showModels(chatID int64) {
 		enabled = append(enabled, model)
 	}
 	if len(enabled) == 0 {
+		stopLoading()
 		a.send(chatID, "No chat models found.")
 		return
 	}
@@ -197,6 +206,7 @@ func (a *App) showModels(chatID int64) {
 		rows = append(rows, row)
 	}
 
+	stopLoading()
 	a.sendMarkup(chatID, b.String(), tgbotapi.NewInlineKeyboardMarkup(rows...))
 }
 

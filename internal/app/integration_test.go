@@ -698,6 +698,27 @@ func TestShowThinkingButton(t *testing.T) {
 	}
 }
 
+func TestDelayedLoadingOnlyShowsForSlowWork(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+
+	slow := a.startDelayedLoading(123, "⏳ Loading test…", 10*time.Millisecond)
+	time.Sleep(40 * time.Millisecond)
+	slow()
+
+	if !strings.Contains(ftg.allText(), "Loading test") {
+		t.Fatalf("slow operation did not show a loading message:\n%s", ftg.allText())
+	}
+	if got := ftg.deletedIDs(); len(got) != 1 {
+		t.Fatalf("deleted messages = %v, want one loading message", got)
+	}
+
+	fast := a.startDelayedLoading(123, "⏳ Should not appear…", time.Second)
+	fast()
+	if strings.Contains(ftg.allText(), "Should not appear") {
+		t.Fatalf("fast operation showed a loading message:\n%s", ftg.allText())
+	}
+}
+
 func TestShowThinkingSendsAndDeletesLoading(t *testing.T) {
 	a, ftg, foc := newIntegrationApp(t)
 	foc.reasoning = "raw secret reasoning"

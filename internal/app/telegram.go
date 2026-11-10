@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -511,6 +512,39 @@ func (a *App) startLoading(chatID int64, text string) func() {
 		return func() {}
 	}
 	return func() { a.deleteMessage(chatID, msg.MessageID) }
+}
+
+// startDelayedLoading only shows a loading message when an operation takes
+// longer than the delay. The returned stop function removes that message and
+// waits for the delayed sender, so it is safe to call from a normal code path.
+func (a *App) startDelayedLoading(chatID int64, text string, delay time.Duration) func() {
+	cancel := make(chan struct{})
+	result := make(chan int, 1)
+	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			msg, err := a.sendMarkup(chatID, text, tgbotapi.InlineKeyboardMarkup{})
+			if err != nil {
+				result <- 0
+				return
+			}
+			result <- msg.MessageID
+		case <-cancel:
+			result <- 0
+		}
+	}()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(cancel)
+			if id := <-result; id > 0 {
+				a.deleteMessage(chatID, id)
+			}
+		})
+	}
 }
 
 func (a *App) deleteMessage(chatID int64, messageID int) {
