@@ -82,6 +82,11 @@ func (a *App) notifySession(sessionID, kind, detail string) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s\n", icon, heading)
 	fmt.Fprintf(&b, "Title: %s\n", sess.DisplayTitle())
+	agent := sess.Agent
+	if agent == "" {
+		agent = "default"
+	}
+	fmt.Fprintf(&b, "Agent: %s\n", agent)
 	if n.IncludeDirectory && sess.Location.Directory != "" {
 		fmt.Fprintf(&b, "Directory: %s\n", sess.Location.Directory)
 	}

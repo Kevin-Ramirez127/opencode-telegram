@@ -21,6 +21,8 @@ var botCommands = []tgbotapi.BotCommand{
 	{Command: "sessions", Description: "List recent sessions and bind one"},
 	{Command: "bind", Description: "Bind this chat to a session"},
 	{Command: "unbind", Description: "Remove the session binding"},
+	{Command: "agents", Description: "List or switch the bound session's agent"},
+	{Command: "models", Description: "List all available chat models"},
 	{Command: "interrupt", Description: "Stop the bound session's current run"},
 	{Command: "notify", Description: "Enable or disable notifications"},
 	{Command: "settings", Description: "Show notification settings"},

@@ -294,6 +294,8 @@ func newSimulationServer() *simulationServer {
 		session: occlient.Session{
 			ID:       simulationSessionID,
 			Title:    "Simulated conversation",
+			Agent:    "build",
+			Model:    occlient.ModelRef{ID: "deepseek-v4.1-flash", ProviderID: "opencode-go"},
 			Outcome:  "succeeded",
 			Location: occlient.Location{Directory: "/tmp/opencode-telegram-sim"},
 			Time: occlient.SessionTime{

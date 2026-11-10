@@ -148,6 +148,12 @@ type fakeOpenCode struct {
 	formAnswer    map[string]any
 	permission    string
 	sessionTitle  string
+	sessionAgent  string
+	sessionModel  occlient.ModelRef
+	agents        []occlient.AgentInfo
+	models        []occlient.ModelInfo
+	switchedAgent string
+	switchedModel occlient.ModelRef
 	lastAssistant string
 	lastParts     []string
 	reasoning     string
@@ -181,13 +187,49 @@ func (f *fakeOpenCode) message() map[string]any {
 func (f *fakeOpenCode) handler(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/session/ses_1":
+		f.mu.Lock()
+		agent := f.sessionAgent
+		model := f.sessionModel
+		f.mu.Unlock()
 		writeFakeJSON(w, map[string]any{"data": map[string]any{
 			"id":       "ses_1",
 			"title":    f.sessionTitle,
+			"agent":    agent,
+			"model":    model,
 			"outcome":  "succeeded",
 			"location": map[string]any{"directory": "/tmp/project"},
 			"time":     map[string]any{"created": 1, "busy": 58001, "updated": 61001},
 		}})
+	case r.Method == http.MethodGet && r.URL.Path == "/api/agent":
+		f.mu.Lock()
+		agents := append([]occlient.AgentInfo(nil), f.agents...)
+		f.mu.Unlock()
+		writeFakeJSON(w, map[string]any{"data": agents})
+	case r.Method == http.MethodGet && r.URL.Path == "/api/model":
+		f.mu.Lock()
+		models := append([]occlient.ModelInfo(nil), f.models...)
+		f.mu.Unlock()
+		writeFakeJSON(w, map[string]any{"data": models})
+	case r.Method == http.MethodPost && r.URL.Path == "/api/session/ses_1/agent":
+		var body struct {
+			Agent string `json:"agent"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.mu.Lock()
+		f.switchedAgent = body.Agent
+		f.sessionAgent = body.Agent
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/session/ses_1/model":
+		var body struct {
+			Model occlient.ModelRef `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.mu.Lock()
+		f.switchedModel = body.Model
+		f.sessionModel = body.Model
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/session/ses_1/message":
 		writeFakeJSON(w, map[string]any{"data": []any{f.message()}})
 	case r.Method == http.MethodGet && r.URL.Path == "/api/session/ses_1/message/msg_1":
@@ -259,7 +301,23 @@ func newIntegrationApp(t *testing.T) (*App, *fakeTelegram, *fakeOpenCode) {
 	tgSrv := httptest.NewServer(http.HandlerFunc(ftg.handler))
 	t.Cleanup(tgSrv.Close)
 
-	foc := &fakeOpenCode{sessionTitle: "Build the thing", lastAssistant: "All changes are in."}
+	foc := &fakeOpenCode{
+		sessionTitle: "Build the thing",
+		sessionAgent: "build",
+		sessionModel: occlient.ModelRef{ID: "deepseek-v4-flash", ProviderID: "opencode-go"},
+		agents: []occlient.AgentInfo{
+			{ID: "build", Name: "Build", Mode: "primary"},
+			{ID: "plan", Name: "Plan", Mode: "primary"},
+			{ID: "explore", Name: "Explore", Mode: "subagent"},
+			{ID: "hidden", Name: "Hidden", Mode: "primary", Hidden: true},
+		},
+		models: []occlient.ModelInfo{
+			{ID: "deepseek-v4-flash", ModelID: "deepseek-v4-flash", ProviderID: "opencode-go", Name: "DeepSeek V4 Flash", Status: "active", Enabled: true, Type: "chat"},
+			{ID: "gpt-6", ModelID: "gpt-6", ProviderID: "opencode", Name: "GPT-6", Status: "active", Enabled: true, Type: "chat"},
+			{ID: "old-model", ModelID: "old-model", ProviderID: "opencode", Name: "Old Model", Status: "deprecated", Enabled: false, Type: "chat"},
+		},
+		lastAssistant: "All changes are in.",
+	}
 	ocSrv := httptest.NewServer(http.HandlerFunc(foc.handler))
 	t.Cleanup(ocSrv.Close)
 
@@ -343,13 +401,88 @@ func TestSessionDoneNotification(t *testing.T) {
 		Data: []byte(`{"sessionID":"ses_1"}`),
 	})
 	all := ftg.allText()
-	for _, want := range []string{"session finished", "Build the thing", "All changes are in.", "Duration: 3s"} {
+	for _, want := range []string{"session finished", "Build the thing", "Agent: build", "All changes are in.", "Duration: 3s"} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("notification missing %q:\n%s", want, all)
 		}
 	}
 	if st := a.sessionSnapshot("ses_1"); st.Busy || st.Outcome != "succeeded" {
 		t.Fatalf("state = %+v", st)
+	}
+}
+
+func TestAgentsCommandSwitchesAgent(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	a.setBinding(123, "ses_1")
+
+	a.handleCommand(123, 123, "/agents")
+
+	all := ftg.allText()
+	for _, want := range []string{"Agents for Build the thing", "Current: `build`"} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("agents message missing %q:\n%s", want, all)
+		}
+	}
+	agentIDs := make(map[string]bool)
+	a.mu.Lock()
+	for _, act := range a.actions {
+		if act.Kind == "agent" {
+			agentIDs[act.Value] = true
+		}
+	}
+	a.mu.Unlock()
+	if !agentIDs["build"] || !agentIDs["plan"] {
+		t.Fatalf("agent buttons = %v, want build and plan", agentIDs)
+	}
+	if agentIDs["explore"] || agentIDs["hidden"] {
+		t.Fatalf("agent buttons should exclude subagents/hidden agents: %v", agentIDs)
+	}
+
+	token, _ := findAction(t, a, "agent", "plan")
+	a.handleCallbackFrom(123, 42, callbackData(token))
+
+	foc.mu.Lock()
+	switched := foc.switchedAgent
+	foc.mu.Unlock()
+	if switched != "plan" {
+		t.Fatalf("switched agent = %q, want plan", switched)
+	}
+	if got := ftg.lastText(); !strings.Contains(got, "Agent switched to `plan`") {
+		t.Fatalf("switch feedback = %q", got)
+	}
+}
+
+func TestModelsCommandListsAvailableModels(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+	a.setBinding(123, "ses_1")
+
+	a.handleCommand(123, 123, "/models")
+
+	all := ftg.allText()
+	for _, want := range []string{
+		"Available models (2)",
+		"DeepSeek V4 Flash",
+		"GPT-6",
+		"Current: `opencode-go/deepseek-v4-flash`",
+		"**opencode-go**",
+		"**opencode**",
+	} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("models message missing %q:\n%s", want, all)
+		}
+	}
+	if strings.Contains(all, "Old Model") {
+		t.Fatalf("disabled model should not be listed:\n%s", all)
+	}
+}
+
+func TestAgentsCommandRequiresBoundSession(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+
+	a.handleCommand(123, 123, "/agents")
+
+	if got := ftg.lastText(); !strings.Contains(got, "No session bound") {
+		t.Fatalf("agents feedback = %q", got)
 	}
 }
 

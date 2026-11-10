@@ -167,11 +167,45 @@ type Session struct {
 	ParentID  string      `json:"parentID,omitempty"`
 	ProjectID string      `json:"projectID,omitempty"`
 	Agent     string      `json:"agent,omitempty"`
+	Model     ModelRef    `json:"model,omitempty"`
 	Title     string      `json:"title,omitempty"`
 	Outcome   string      `json:"outcome,omitempty"`
 	Cost      float64     `json:"cost,omitempty"`
 	Time      SessionTime `json:"time"`
 	Location  Location    `json:"location"`
+}
+
+type ModelRef struct {
+	ID         string `json:"id"`
+	ProviderID string `json:"providerID"`
+	Variant    string `json:"variant,omitempty"`
+}
+
+func (m ModelRef) Key() string {
+	if m.ID == "" || m.ProviderID == "" {
+		return ""
+	}
+	return m.ProviderID + "/" + m.ID
+}
+
+type AgentInfo struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description,omitempty"`
+	Mode        string    `json:"mode"`
+	Hidden      bool      `json:"hidden"`
+	Model       *ModelRef `json:"model,omitempty"`
+}
+
+type ModelInfo struct {
+	ID         string `json:"id"`
+	ModelID    string `json:"modelID"`
+	ProviderID string `json:"providerID"`
+	Name       string `json:"name"`
+	Type       string `json:"type,omitempty"`
+	Family     string `json:"family,omitempty"`
+	Status     string `json:"status"`
+	Enabled    bool   `json:"enabled"`
 }
 
 func (s Session) DisplayTitle() string {
@@ -349,6 +383,56 @@ func (c *Client) GetSession(ctx context.Context, sessionID string) (Session, err
 	}
 	err := c.do(ctx, http.MethodGet, "/api/session/"+url.PathEscape(sessionID), nil, &out)
 	return out.Data, err
+}
+
+// ListAgents returns the agents registered for a location (usually the
+// session's working directory).
+func (c *Client) ListAgents(ctx context.Context, directory string) ([]AgentInfo, error) {
+	var out struct {
+		Data []AgentInfo `json:"data"`
+	}
+	path := "/api/agent"
+	if q := locationQuery(directory); len(q) > 0 {
+		path += "?" + q
+	}
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Data, nil
+}
+
+// ListModels returns the chat models available for a location.
+func (c *Client) ListModels(ctx context.Context, directory string) ([]ModelInfo, error) {
+	var out struct {
+		Data []ModelInfo `json:"data"`
+	}
+	q := url.Values{}
+	q.Set("types", "chat")
+	if directory != "" {
+		q.Set("location[directory]", directory)
+	}
+	if err := c.do(ctx, http.MethodGet, "/api/model?"+q.Encode(), nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Data, nil
+}
+
+func (c *Client) SwitchAgent(ctx context.Context, sessionID, agentID string) error {
+	path := "/api/session/" + url.PathEscape(sessionID) + "/agent"
+	return c.do(ctx, http.MethodPost, path, map[string]any{"agent": agentID}, nil)
+}
+
+func (c *Client) SwitchModel(ctx context.Context, sessionID string, model ModelRef) error {
+	path := "/api/session/" + url.PathEscape(sessionID) + "/model"
+	return c.do(ctx, http.MethodPost, path, map[string]any{"model": model}, nil)
+}
+
+func locationQuery(directory string) string {
+	q := url.Values{}
+	if directory != "" {
+		q.Set("location[directory]", directory)
+	}
+	return q.Encode()
 }
 
 func (c *Client) ListMessages(ctx context.Context, sessionID string) ([]Message, error) {

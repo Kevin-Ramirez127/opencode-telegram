@@ -135,6 +135,19 @@ func (a *App) handleCommand(chatID, userID int64, text string) {
 	case "/unbind":
 		a.setBinding(chatID, "")
 		a.send(chatID, "🔓 Unbound. Session notifications are unaffected.")
+	case "/agents", "/agent":
+		sessionID := a.binding(chatID)
+		if sessionID == "" {
+			a.send(chatID, "No session bound. Send /sessions to pick one.")
+			return
+		}
+		if len(args) > 0 {
+			a.switchAgentFromCommand(chatID, sessionID, args[0])
+			return
+		}
+		a.showAgents(chatID)
+	case "/models", "/model":
+		a.showModels(chatID)
 	case "/notify":
 		a.commandNotify(chatID, args)
 	case "/interrupt", "/stop":
@@ -165,6 +178,8 @@ func (a *App) helpText() string {
 		"/sessions — list recent sessions and bind one",
 		"/bind <id> — bind this chat to a session",
 		"/unbind — remove the binding",
+		"/agents [id] — list or switch the bound session's agent",
+		"/models — list all available chat models",
 		"/interrupt — stop the bound session's current run",
 		"/notify on|off — enable or disable notifications",
 		"/settings — show notification settings",
@@ -410,7 +425,7 @@ func (a *App) handleCallbackFrom(chatID int64, messageID int, data string) {
 	}
 	if act.ChatID != 0 && act.ChatID != chatID {
 		switch act.Kind {
-		case "daemon_exit", "poweroff", "confirm_cancel":
+		case "agent", "daemon_exit", "poweroff", "confirm_cancel":
 			a.send(chatID, "⚠️ This button belongs to another chat.")
 			return
 		}
@@ -433,6 +448,8 @@ func (a *App) handleCallbackFrom(chatID int64, messageID int, data string) {
 	case "bind_reply":
 		a.setBinding(chatID, act.SessionID)
 		a.send(chatID, fmt.Sprintf("🔗 Bound to %s.\nType your message now.", a.sessionLabel(act.SessionID)))
+	case "agent":
+		a.switchAgent(chatID, messageID, act.SessionID, act.Value)
 	case "show_thinking":
 		a.showThinking(chatID, act)
 	case "summarize_thinking":
