@@ -17,6 +17,11 @@
 #   ./scripts/daemon.sh check                  validate config and connectivity
 #   ./scripts/daemon.sh config [options]       manage the user/chat allowlist
 #   ./scripts/daemon.sh settings [show|edit]   show or edit settings.json
+#   ./scripts/daemon.sh simulate [scenario]    send premade conversations to Telegram
+#
+# simulate scenarios: text, done, failed, interrupted, question1, question2,
+#   question3, permission, retry, all (default), list.
+#   Stop the running daemon first: Telegram delivers updates to one poller.
 #
 # config options:
 #   --adduser <id>    allowlist a user AND the same id as a chat (covers DMs)
@@ -334,6 +339,22 @@ cmd_settings() {
   esac
 }
 
+cmd_simulate() {
+  local scenario="${1:-all}"
+  ensure_built
+  if [[ "$scenario" == "list" ]]; then
+    cd "$ROOT"
+    exec "$BIN" --simulate list
+  fi
+  has_token || fail "TELEGRAM_BOT_TOKEN is not set — export it or put it in $ROOT/.env (see .env.example)"
+  if current_pid >/dev/null; then
+    echo "warning: the daemon is running; stop it first so it does not consume the simulated buttons:" >&2
+    echo "         opencode-telegram stop" >&2
+  fi
+  cd "$ROOT"
+  exec "$BIN" --simulate "$scenario"
+}
+
 usage() {
   sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
 }
@@ -351,6 +372,7 @@ case "$cmd" in
   check)   ensure_built; has_token || fail "TELEGRAM_BOT_TOKEN is not set"; cd "$ROOT" && "$BIN" --check ;;
   config)  cmd_config "$@" ;;
   settings) cmd_settings "${1:-show}" ;;
+  simulate) cmd_simulate "${1:-all}" ;;
   help|-h|--help|"") usage ;;
-  *) fail "unknown command '$cmd' (try: start|stop|restart|status|logs|reload|run|check|config|settings)" ;;
+  *) fail "unknown command '$cmd' (try: start|stop|restart|status|logs|reload|run|check|config|settings|simulate)" ;;
 esac

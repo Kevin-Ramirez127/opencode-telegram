@@ -102,6 +102,7 @@ info "installing application to $APP_DIR..."
 mkdir -p "$APP_DIR/bin" "$APP_DIR/scripts" "$APP_DIR/data" "$APP_DIR/packaging"
 install -m755 bin/opencode-telegram "$APP_DIR/bin/opencode-telegram"
 install -m755 scripts/daemon.sh "$APP_DIR/scripts/daemon.sh"
+install -m755 scripts/simulate.sh "$APP_DIR/scripts/simulate.sh"
 install -m644 packaging/opencode-telegram.service "$APP_DIR/packaging/opencode-telegram.service" 2>/dev/null || true
 info "installed binary + control script"
 

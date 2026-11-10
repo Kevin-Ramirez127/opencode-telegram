@@ -59,6 +59,7 @@ func (n *Notifications) UnmarshalJSON(data []byte) error {
 type Security struct {
 	AllowCustomFormAnswers bool `json:"allow_custom_form_answers"`
 	AllowNewMessages       bool `json:"allow_new_messages"`
+	AllowModelSwitching    bool `json:"allow_model_switching"`
 }
 
 type Settings struct {
@@ -89,6 +90,7 @@ func Defaults() Settings {
 		Security: Security{
 			AllowCustomFormAnswers: false,
 			AllowNewMessages:       false,
+			AllowModelSwitching:    false,
 		},
 	}
 }
@@ -118,6 +120,7 @@ type NotificationsPatch struct {
 type SecurityPatch struct {
 	AllowCustomFormAnswers *bool `json:"allow_custom_form_answers,omitempty"`
 	AllowNewMessages       *bool `json:"allow_new_messages,omitempty"`
+	AllowModelSwitching    *bool `json:"allow_model_switching,omitempty"`
 }
 
 // Store is a concurrency-safe settings file.
@@ -260,6 +263,9 @@ func applySecurity(dst *Security, p *SecurityPatch) {
 	}
 	if p.AllowNewMessages != nil {
 		dst.AllowNewMessages = *p.AllowNewMessages
+	}
+	if p.AllowModelSwitching != nil {
+		dst.AllowModelSwitching = *p.AllowModelSwitching
 	}
 }
 

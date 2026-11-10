@@ -82,6 +82,11 @@ func (a *App) notifySession(sessionID, kind, detail string) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s %s\n", icon, heading)
 	fmt.Fprintf(&b, "Title: %s\n", sess.DisplayTitle())
+	agent := sess.Agent
+	if agent == "" {
+		agent = "default"
+	}
+	fmt.Fprintf(&b, "Agent: %s\n", agent)
 	if n.IncludeDirectory && sess.Location.Directory != "" {
 		fmt.Fprintf(&b, "Directory: %s\n", sess.Location.Directory)
 	}
@@ -207,14 +212,24 @@ func (a *App) fetchSession(sessionID string) (occlient.Session, error) {
 }
 
 func sessionDuration(s occlient.Session) string {
-	if s.Time.Created <= 0 {
+	// Busy marks when the current run started (normally when the user sent the
+	// prompt). Created is only a fallback for old sessions that do not carry
+	// run timing; using it directly would report the whole session lifetime.
+	start := s.Time.Busy
+	if start <= 0 || start < s.Time.Created {
+		start = s.Time.Created
+	}
+	if start <= 0 {
 		return ""
 	}
 	end := s.Time.Updated
-	if end <= s.Time.Created {
+	if s.Time.Idle > end {
+		end = s.Time.Idle
+	}
+	if end <= start {
 		end = time.Now().UnixMilli()
 	}
-	d := time.Duration(end-s.Time.Created) * time.Millisecond
+	d := time.Duration(end-start) * time.Millisecond
 	if d < time.Second {
 		return ""
 	}

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -8,6 +9,16 @@ import (
 
 	"opencode-telegram/internal/occlient"
 )
+
+func TestEmptyInlineKeyboardEncodesArray(t *testing.T) {
+	data, err := json.Marshal(emptyInlineKeyboard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != `{"inline_keyboard":[]}` {
+		t.Fatalf("empty keyboard = %s, want an explicit empty array", data)
+	}
+}
 
 func TestFormatDuration(t *testing.T) {
 	cases := []struct {
@@ -22,6 +33,47 @@ func TestFormatDuration(t *testing.T) {
 	for _, c := range cases {
 		if got := formatDuration(c.d); got != c.want {
 			t.Errorf("formatDuration(%s) = %q, want %q", c.d, got, c.want)
+		}
+	}
+}
+
+func TestSessionDurationUsesCurrentRun(t *testing.T) {
+	cases := []struct {
+		name string
+		sess occlient.Session
+		want string
+	}{
+		{
+			name: "busy marks the latest prompt",
+			sess: occlient.Session{Time: occlient.SessionTime{
+				Created: 1_000,
+				Busy:    50_000,
+				Updated: 80_000,
+			}},
+			want: "30s",
+		},
+		{
+			name: "idle is the end of the run",
+			sess: occlient.Session{Time: occlient.SessionTime{
+				Created: 1_000,
+				Busy:    50_000,
+				Updated: 80_000,
+				Idle:    81_000,
+			}},
+			want: "31s",
+		},
+		{
+			name: "sessions without busy fall back to created",
+			sess: occlient.Session{Time: occlient.SessionTime{
+				Created: 10_000,
+				Updated: 70_000,
+			}},
+			want: "1m",
+		},
+	}
+	for _, c := range cases {
+		if got := sessionDuration(c.sess); got != c.want {
+			t.Errorf("%s: sessionDuration() = %q, want %q", c.name, got, c.want)
 		}
 	}
 }

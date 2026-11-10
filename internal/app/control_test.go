@@ -34,10 +34,13 @@ func TestExitCommandRequiresConfirmation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("confirming /exit did not request shutdown")
 	}
+	if got := ftg.lastText(); !strings.Contains(got, "daemon stopped") {
+		t.Fatalf("success feedback = %q", got)
+	}
 }
 
 func TestExitCommandCancelKeepsDaemonRunning(t *testing.T) {
-	a, _, _ := newIntegrationApp(t)
+	a, ftg, _ := newIntegrationApp(t)
 
 	a.handleCommand(123, 123, "/exit")
 	token, _ := findAction(t, a, "confirm_cancel", "")
@@ -48,10 +51,13 @@ func TestExitCommandCancelKeepsDaemonRunning(t *testing.T) {
 		t.Fatal("cancelling /exit stopped the daemon")
 	default:
 	}
+	if got := ftg.lastText(); !strings.Contains(got, "Operation aborted") {
+		t.Fatalf("cancel feedback = %q", got)
+	}
 }
 
 func TestPowerOffRequiresConfirmation(t *testing.T) {
-	a, _, _ := newIntegrationApp(t)
+	a, ftg, _ := newIntegrationApp(t)
 	called := make(chan struct{}, 1)
 	a.poweroff = func(context.Context) error {
 		called <- struct{}{}
@@ -77,10 +83,11 @@ func TestPowerOffRequiresConfirmation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("confirming /poweroff did not run the power-off command")
 	}
+	waitForText(t, ftg, "Poweroff executed successfully")
 }
 
 func TestPowerOffCancelDoesNotRun(t *testing.T) {
-	a, _, _ := newIntegrationApp(t)
+	a, ftg, _ := newIntegrationApp(t)
 	called := make(chan struct{}, 1)
 	a.poweroff = func(context.Context) error {
 		called <- struct{}{}
@@ -96,6 +103,21 @@ func TestPowerOffCancelDoesNotRun(t *testing.T) {
 		t.Fatal("cancelling /poweroff ran the power-off command")
 	case <-time.After(50 * time.Millisecond):
 	}
+	if got := ftg.lastText(); !strings.Contains(got, "Operation aborted") {
+		t.Fatalf("cancel feedback = %q", got)
+	}
+}
+
+func waitForText(t *testing.T, ftg *fakeTelegram, want string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(ftg.allText(), want) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("no message contained %q:\n%s", want, ftg.allText())
 }
 
 func TestEnsureBotCommandsAddsMissingWithoutReplacing(t *testing.T) {

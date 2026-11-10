@@ -195,10 +195,17 @@ notifications**). It edits `data/settings.json` through the daemon API:
   },
   "security": {
     "allow_custom_form_answers": false,
-    "allow_new_messages": false
+    "allow_new_messages": false,
+    "allow_model_switching": false
   }
 }
 ```
+
+The footer **✈ Telegram** icon shows **off** whenever the daemon is stopped.
+Clicking it (or opening `/telegram`) starts the daemon through
+`opencode-telegram start`; if the icon was off, it also enables notifications.
+Set the plugin option `autoStart` to `true` to start the service when the
+plugin loads.
 
 `notify_chats` empty means “every allowlisted chat”. Entries must themselves be
 allowlisted; the API rejects anything else.
@@ -208,8 +215,13 @@ often and usually should not page you.
 
 ### Long messages
 
-Telegram rejects messages over 4096 bytes. `long_message_mode` decides what the
-daemon does when the last assistant message would not fit:
+Notifications and bot replies are sent with Telegram `sendRichMessage`, so
+headings, lists, tables, links, and code blocks in OpenCode output render
+natively instead of appearing as raw Markdown. If the Telegram server does not
+support rich messages, the daemon falls back to plain text automatically.
+
+Telegram rejects regular messages over 4096 bytes. `long_message_mode` decides
+what the daemon does when the last assistant message would not fit:
 
 | Value | Behavior |
 |---|---|
@@ -244,6 +256,7 @@ is single-use so repeated taps cannot start multiple generations.
 |---|---|---|
 | `allow_custom_form_answers` | `false` | Adds **“Type your own response”** to questions. Without it, only the options offered by the form (or answering inside OpenCode) are possible. |
 | `allow_new_messages` | `false` | Lets free-text Telegram messages become prompts for the chat's bound session. |
+| `allow_model_switching` | `false` | Lets `/models` change the model used by the bound session. Without it, `/models` explains that the configuration does not allow choosing models. |
 
 They are intentionally **not** exposed as Telegram commands: a compromised
 Telegram session must not be able to grant itself prompt-injection rights.
@@ -261,6 +274,9 @@ Change them from the plugin (which asks for confirmation) or by editing
 | `/sessions` | Recent sessions with bind buttons |
 | `/bind <session-id>` | Bind this chat to a session |
 | `/unbind` | Remove the binding |
+| `/agents [agent-id]` | List or switch the bound session's agent |
+| `/models` | List every available chat model with a switch button for each (requires `allow_model_switching`) |
+| `/usage` | Show OpenCode Go and Console usage limits |
 | `/interrupt` | Interrupt the bound session's current run |
 | `/notify on\|off` | Toggle notification delivery |
 | `/settings` | Show current notification/security settings |
@@ -273,6 +289,19 @@ Change them from the plugin (which asks for confirmation) or by editing
 `/poweroff` asks the operating system to shut down the machine. Both commands
 are available only to allowlisted users/chats, and neither runs until the
 confirmation button is pressed. Cancel buttons dismiss the request.
+
+`/agents` lists the primary agents for the bound session and lets you switch
+with a button (or pass an agent id directly). `/models` lists every enabled
+chat model with one switch button per model, marking the model currently
+selected for the bound session; it requires `allow_model_switching`, otherwise
+it replies that the configuration does not allow choosing models. Both commands
+show a temporary loading message if the OpenCode API takes longer than 250 ms.
+Finished-session notifications include an `Agent:` line showing the agent that
+handled the run.
+
+`/usage` reads the OpenCode Console usage-limits API and renders the workspace,
+rolling/weekly/monthly OpenCode Go percentages, reset times, and any Console
+budgets as Markdown tables. API failures are reported in the chat.
 
 The daemon also adds its commands to the bot menu if they are missing. Existing
 bot commands are preserved, so commands registered with BotFather are not
@@ -362,7 +391,37 @@ make vet
 make fmt
 make run         # foreground
 make check       # validate config + connectivity
+make simulate    # send premade conversations to Telegram
 ```
+
+### Simulating Telegram output
+
+The simulator sends real, premade OpenCode conversations to the allowlisted
+Telegram chats without creating an OpenCode session:
+
+```bash
+./scripts/simulate.sh list          # scenario names
+./scripts/simulate.sh               # everything
+./scripts/simulate.sh text          # rich Markdown formatting
+./scripts/simulate.sh done          # finished-session notification
+./scripts/simulate.sh question1     # question with 1 field
+./scripts/simulate.sh question2     # question with 2 fields
+./scripts/simulate.sh question3     # question with 3 fields
+./scripts/simulate.sh permission    # permission request
+./scripts/simulate.sh text,done     # comma-separated scenarios
+```
+
+The installed command exposes the same thing:
+
+```bash
+opencode-telegram simulate question3
+```
+
+Question, permission, thinking, and summary buttons stay active while the
+simulator process runs. Stop the real daemon first: Telegram delivers each
+update to only one poller, so a running daemon would consume the simulated
+button presses. The simulator uses a temporary settings file and a fake
+OpenCode API, so it never changes your real settings or session state.
 
 Layout:
 
@@ -378,7 +437,8 @@ internal/safeio             atomic 0600 writes
 plugins/opencode-telegram   OpenCode TUI settings plugin
 data/*.example.json         tracked allowlist/settings templates
 data/*.json                 local state (gitignored)
-scripts/daemon.sh           start/stop/logs/config/settings
+scripts/daemon.sh           start/stop/logs/config/settings/simulate
+scripts/simulate.sh         premade Telegram QA conversations
 packaging/                  systemd user unit
 ```
 

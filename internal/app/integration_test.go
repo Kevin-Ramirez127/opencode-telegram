@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +25,9 @@ import (
 type fakeTelegram struct {
 	mu         sync.Mutex
 	texts      []string
+	richTexts  []string
+	deleted    []int
+	lastMarkup string
 	nextID     int
 	commands   []tgbotapi.BotCommand
 	registered []tgbotapi.BotCommand
@@ -51,12 +55,41 @@ func (f *fakeTelegram) handler(w http.ResponseWriter, r *http.Request) {
 		f.mu.Unlock()
 		_, _ = io.WriteString(w, `{"ok":true,"result":true}`)
 		return
+	case "deleteMessage":
+		_ = r.ParseForm()
+		var messageID int
+		_, _ = fmt.Sscanf(r.FormValue("message_id"), "%d", &messageID)
+		f.mu.Lock()
+		f.deleted = append(f.deleted, messageID)
+		f.mu.Unlock()
+		_, _ = io.WriteString(w, `{"ok":true,"result":true}`)
+		return
 	}
 	_ = r.ParseForm()
 	text := r.FormValue("text")
+	rich := r.FormValue("rich_message")
+	markup := r.FormValue("reply_markup")
+	if text == "" && rich != "" {
+		var content struct {
+			Markdown string `json:"markdown"`
+			HTML     string `json:"html"`
+		}
+		if json.Unmarshal([]byte(rich), &content) == nil {
+			text = content.Markdown
+			if text == "" {
+				text = content.HTML
+			}
+		}
+	}
 	f.mu.Lock()
 	if text != "" {
 		f.texts = append(f.texts, text)
+	}
+	if rich != "" {
+		f.richTexts = append(f.richTexts, text)
+	}
+	if markup != "" {
+		f.lastMarkup = markup
 	}
 	f.nextID++
 	id := f.nextID
@@ -86,6 +119,24 @@ func (f *fakeTelegram) allTexts() []string {
 	return append([]string(nil), f.texts...)
 }
 
+func (f *fakeTelegram) allRichTexts() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.richTexts...)
+}
+
+func (f *fakeTelegram) deletedIDs() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int(nil), f.deleted...)
+}
+
+func (f *fakeTelegram) lastReplyMarkup() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastMarkup
+}
+
 func (f *fakeTelegram) registeredCommands() []tgbotapi.BotCommand {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -97,6 +148,14 @@ type fakeOpenCode struct {
 	formAnswer    map[string]any
 	permission    string
 	sessionTitle  string
+	sessionAgent  string
+	sessionModel  occlient.ModelRef
+	agents        []occlient.AgentInfo
+	models        []occlient.ModelInfo
+	usage         *occlient.UsageLimits
+	usageErr      bool
+	switchedAgent string
+	switchedModel occlient.ModelRef
 	lastAssistant string
 	lastParts     []string
 	reasoning     string
@@ -130,13 +189,60 @@ func (f *fakeOpenCode) message() map[string]any {
 func (f *fakeOpenCode) handler(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/session/ses_1":
+		f.mu.Lock()
+		agent := f.sessionAgent
+		model := f.sessionModel
+		f.mu.Unlock()
 		writeFakeJSON(w, map[string]any{"data": map[string]any{
 			"id":       "ses_1",
 			"title":    f.sessionTitle,
+			"agent":    agent,
+			"model":    model,
 			"outcome":  "succeeded",
 			"location": map[string]any{"directory": "/tmp/project"},
-			"time":     map[string]any{"created": 1, "updated": 61001},
+			"time":     map[string]any{"created": 1, "busy": 58001, "updated": 61001},
 		}})
+	case r.Method == http.MethodGet && r.URL.Path == "/api/agent":
+		f.mu.Lock()
+		agents := append([]occlient.AgentInfo(nil), f.agents...)
+		f.mu.Unlock()
+		writeFakeJSON(w, map[string]any{"data": agents})
+	case r.Method == http.MethodGet && r.URL.Path == "/api/model":
+		f.mu.Lock()
+		models := append([]occlient.ModelInfo(nil), f.models...)
+		f.mu.Unlock()
+		writeFakeJSON(w, map[string]any{"data": models})
+	case r.Method == http.MethodGet && r.URL.Path == "/api/experimental/usage/limits":
+		f.mu.Lock()
+		usage := f.usage
+		usageErr := f.usageErr
+		f.mu.Unlock()
+		if usageErr {
+			w.WriteHeader(http.StatusInternalServerError)
+			writeFakeJSON(w, map[string]any{"message": "usage service unavailable"})
+			return
+		}
+		writeFakeJSON(w, map[string]any{"data": usage})
+	case r.Method == http.MethodPost && r.URL.Path == "/api/session/ses_1/agent":
+		var body struct {
+			Agent string `json:"agent"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.mu.Lock()
+		f.switchedAgent = body.Agent
+		f.sessionAgent = body.Agent
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/session/ses_1/model":
+		var body struct {
+			Model occlient.ModelRef `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.mu.Lock()
+		f.switchedModel = body.Model
+		f.sessionModel = body.Model
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/session/ses_1/message":
 		writeFakeJSON(w, map[string]any{"data": []any{f.message()}})
 	case r.Method == http.MethodGet && r.URL.Path == "/api/session/ses_1/message/msg_1":
@@ -208,7 +314,35 @@ func newIntegrationApp(t *testing.T) (*App, *fakeTelegram, *fakeOpenCode) {
 	tgSrv := httptest.NewServer(http.HandlerFunc(ftg.handler))
 	t.Cleanup(tgSrv.Close)
 
-	foc := &fakeOpenCode{sessionTitle: "Build the thing", lastAssistant: "All changes are in."}
+	foc := &fakeOpenCode{
+		sessionTitle: "Build the thing",
+		sessionAgent: "build",
+		sessionModel: occlient.ModelRef{ID: "deepseek-v4-flash", ProviderID: "opencode-go"},
+		agents: []occlient.AgentInfo{
+			{ID: "build", Name: "Build", Mode: "primary"},
+			{ID: "plan", Name: "Plan", Mode: "primary"},
+			{ID: "explore", Name: "Explore", Mode: "subagent"},
+			{ID: "hidden", Name: "Hidden", Mode: "primary", Hidden: true},
+		},
+		models: []occlient.ModelInfo{
+			{ID: "deepseek-v4-flash", ModelID: "deepseek-v4-flash", ProviderID: "opencode-go", Name: "DeepSeek V4 Flash", Status: "active", Enabled: true, Type: "chat"},
+			{ID: "gpt-6", ModelID: "gpt-6", ProviderID: "opencode", Name: "GPT-6", Status: "active", Enabled: true, Type: "chat"},
+			{ID: "old-model", ModelID: "old-model", ProviderID: "opencode", Name: "Old Model", Status: "deprecated", Enabled: false, Type: "chat"},
+		},
+		usage: &occlient.UsageLimits{
+			Workspace: occlient.UsageWorkspace{
+				ID:       "org_test",
+				Name:     "Personal",
+				UsageURL: "https://opencode.ai/console/org_test/activity/overview",
+			},
+			Go: &occlient.UsageGo{
+				Rolling: occlient.UsageMeter{Percent: 2, ResetsAt: 1_800_000_000_000},
+				Weekly:  occlient.UsageMeter{Percent: 5, ResetsAt: 1_800_100_000_000},
+				Monthly: occlient.UsageMeter{Percent: 3, ResetsAt: 1_800_200_000_000},
+			},
+		},
+		lastAssistant: "All changes are in.",
+	}
 	ocSrv := httptest.NewServer(http.HandlerFunc(foc.handler))
 	t.Cleanup(ocSrv.Close)
 
@@ -260,6 +394,31 @@ func findAction(t *testing.T, a *App, kind, value string) (string, action) {
 	return "", action{}
 }
 
+func TestSendAndEditUseRichMessages(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+
+	a.send(123, "**bold** output")
+	a.editMarkup(123, 1, "_edited_ output", nil)
+
+	rich := ftg.allRichTexts()
+	if len(rich) != 2 {
+		t.Fatalf("rich messages = %v, want 2", rich)
+	}
+	if rich[0] != "**bold** output" || rich[1] != "_edited_ output" {
+		t.Fatalf("rich messages = %v", rich)
+	}
+}
+
+func TestEditMarkupClearsButtonsWithArray(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+
+	a.editMarkup(123, 42, "Operation aborted.", nil)
+
+	if got := ftg.lastReplyMarkup(); got != `{"inline_keyboard":[]}` {
+		t.Fatalf("reply markup = %s, want an explicit empty array", got)
+	}
+}
+
 func TestSessionDoneNotification(t *testing.T) {
 	a, ftg, _ := newIntegrationApp(t)
 	a.handleEvent(occlient.Event{
@@ -267,13 +426,217 @@ func TestSessionDoneNotification(t *testing.T) {
 		Data: []byte(`{"sessionID":"ses_1"}`),
 	})
 	all := ftg.allText()
-	for _, want := range []string{"session finished", "Build the thing", "All changes are in."} {
+	for _, want := range []string{"session finished", "Build the thing", "Agent: build", "All changes are in.", "Duration: 3s"} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("notification missing %q:\n%s", want, all)
 		}
 	}
 	if st := a.sessionSnapshot("ses_1"); st.Busy || st.Outcome != "succeeded" {
 		t.Fatalf("state = %+v", st)
+	}
+}
+
+func TestAgentsCommandSwitchesAgent(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	a.setBinding(123, "ses_1")
+
+	a.handleCommand(123, 123, "/agents")
+
+	all := ftg.allText()
+	for _, want := range []string{"Agents for Build the thing", "Current: `build`"} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("agents message missing %q:\n%s", want, all)
+		}
+	}
+	agentIDs := make(map[string]bool)
+	a.mu.Lock()
+	for _, act := range a.actions {
+		if act.Kind == "agent" {
+			agentIDs[act.Value] = true
+		}
+	}
+	a.mu.Unlock()
+	if !agentIDs["build"] || !agentIDs["plan"] {
+		t.Fatalf("agent buttons = %v, want build and plan", agentIDs)
+	}
+	if agentIDs["explore"] || agentIDs["hidden"] {
+		t.Fatalf("agent buttons should exclude subagents/hidden agents: %v", agentIDs)
+	}
+
+	token, _ := findAction(t, a, "agent", "plan")
+	a.handleCallbackFrom(123, 42, callbackData(token))
+
+	foc.mu.Lock()
+	switched := foc.switchedAgent
+	foc.mu.Unlock()
+	if switched != "plan" {
+		t.Fatalf("switched agent = %q, want plan", switched)
+	}
+	if got := ftg.lastText(); !strings.Contains(got, "Agent switched to `plan`") {
+		t.Fatalf("switch feedback = %q", got)
+	}
+}
+
+func TestModelsCommandListsAvailableModels(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	a.setBinding(123, "ses_1")
+	allowModelSwitching(t, a)
+
+	a.handleCommand(123, 123, "/models")
+
+	all := ftg.allText()
+	for _, want := range []string{
+		"Available models (2)",
+		"Current: `opencode-go/deepseek-v4-flash`",
+	} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("models message missing %q:\n%s", want, all)
+		}
+	}
+
+	modelKeys := make(map[string]bool)
+	a.mu.Lock()
+	for _, act := range a.actions {
+		if act.Kind == "model" {
+			modelKeys[act.Decision+"/"+act.Value] = true
+		}
+	}
+	a.mu.Unlock()
+	if !modelKeys["opencode-go/deepseek-v4-flash"] || !modelKeys["opencode/gpt-6"] {
+		t.Fatalf("model buttons = %v, want both enabled models", modelKeys)
+	}
+	if modelKeys["opencode/old-model"] {
+		t.Fatalf("disabled model should not have a button: %v", modelKeys)
+	}
+
+	token, _ := findAction(t, a, "model", "gpt-6")
+	a.handleCallbackFrom(123, 42, callbackData(token))
+	if got := ftg.lastText(); !strings.Contains(got, "Model switched to `opencode/gpt-6`") {
+		t.Fatalf("switch feedback = %q", got)
+	}
+	foc.mu.Lock()
+	switched := foc.switchedModel
+	foc.mu.Unlock()
+	if switched.ProviderID != "opencode" || switched.ID != "gpt-6" {
+		t.Fatalf("switched model = %+v", switched)
+	}
+}
+
+func TestModelsCommandRequiresBoundSession(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+	allowModelSwitching(t, a)
+
+	a.handleCommand(123, 123, "/models")
+
+	if got := ftg.lastText(); !strings.Contains(got, "No session bound") {
+		t.Fatalf("models feedback = %q", got)
+	}
+}
+
+func TestModelsCommandDisabledByConfiguration(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+	a.setBinding(123, "ses_1")
+
+	a.handleCommand(123, 123, "/models")
+
+	if got := ftg.lastText(); !strings.Contains(got, "does not allow choosing models") {
+		t.Fatalf("models disabled feedback = %q", got)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, act := range a.actions {
+		if act.Kind == "model" {
+			t.Fatal("model buttons must not be created while switching is disabled")
+		}
+	}
+}
+
+func TestModelSwitchBlockedAfterDisable(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	a.setBinding(123, "ses_1")
+	allowModelSwitching(t, a)
+	a.handleCommand(123, 123, "/models")
+	token, _ := findAction(t, a, "model", "gpt-6")
+
+	off := false
+	if _, err := a.settings.Patch(settings.Patch{
+		Security: &settings.SecurityPatch{AllowModelSwitching: &off},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.handleCallbackFrom(123, 42, callbackData(token))
+
+	if got := ftg.lastText(); !strings.Contains(got, "does not allow choosing models") {
+		t.Fatalf("stale model button feedback = %q", got)
+	}
+	foc.mu.Lock()
+	switched := foc.switchedModel
+	foc.mu.Unlock()
+	if switched.ID != "" {
+		t.Fatalf("model switched while disabled: %+v", switched)
+	}
+}
+
+func allowModelSwitching(t *testing.T, a *App) {
+	t.Helper()
+	on := true
+	if _, err := a.settings.Patch(settings.Patch{
+		Security: &settings.SecurityPatch{AllowModelSwitching: &on},
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUsageCommandShowsLimits(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+
+	a.handleCommand(123, 123, "/usage")
+
+	all := ftg.allText()
+	for _, want := range []string{
+		"OpenCode usage limits",
+		"Workspace: **Personal**",
+		"Open usage dashboard",
+		"| Rolling | 2% |",
+		"| Weekly | 5% |",
+		"| Monthly | 3% |",
+		"No budgets configured.",
+	} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("usage message missing %q:\n%s", want, all)
+		}
+	}
+}
+
+func TestUsageCommandReportsErrors(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	foc.usageErr = true
+
+	a.handleCommand(123, 123, "/usage")
+
+	if got := ftg.lastText(); !strings.Contains(got, "Could not read usage limits") {
+		t.Fatalf("usage error feedback = %q", got)
+	}
+}
+
+func TestUsageCommandShowsNullResponse(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	foc.usage = nil
+
+	a.handleCommand(123, 123, "/usage")
+
+	if got := ftg.lastText(); !strings.Contains(got, "Usage limits are unavailable") {
+		t.Fatalf("null usage feedback = %q", got)
+	}
+}
+
+func TestAgentsCommandRequiresBoundSession(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+
+	a.handleCommand(123, 123, "/agents")
+
+	if got := ftg.lastText(); !strings.Contains(got, "No session bound") {
+		t.Fatalf("agents feedback = %q", got)
 	}
 }
 
@@ -456,6 +819,47 @@ func TestShowThinkingButton(t *testing.T) {
 
 	if !strings.Contains(ftg.allText(), "raw secret reasoning") {
 		t.Fatalf("raw thinking was not delivered:\n%s", ftg.allText())
+	}
+}
+
+func TestDelayedLoadingOnlyShowsForSlowWork(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+
+	slow := a.startDelayedLoading(123, "⏳ Loading test…", 10*time.Millisecond)
+	time.Sleep(40 * time.Millisecond)
+	slow()
+
+	if !strings.Contains(ftg.allText(), "Loading test") {
+		t.Fatalf("slow operation did not show a loading message:\n%s", ftg.allText())
+	}
+	if got := ftg.deletedIDs(); len(got) != 1 {
+		t.Fatalf("deleted messages = %v, want one loading message", got)
+	}
+
+	fast := a.startDelayedLoading(123, "⏳ Should not appear…", time.Second)
+	fast()
+	if strings.Contains(ftg.allText(), "Should not appear") {
+		t.Fatalf("fast operation showed a loading message:\n%s", ftg.allText())
+	}
+}
+
+func TestShowThinkingSendsAndDeletesLoading(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	foc.reasoning = "raw secret reasoning"
+
+	a.handleEvent(occlient.Event{
+		Type: "session.execution.succeeded",
+		Data: []byte(`{"sessionID":"ses_1"}`),
+	})
+	token, _ := findAction(t, a, "show_thinking", "")
+	a.handleCallback(123, callbackData(token))
+
+	all := ftg.allText()
+	if !strings.Contains(all, "Loading thinking") || !strings.Contains(all, "raw secret reasoning") {
+		t.Fatalf("missing loading or thinking content:\n%s", all)
+	}
+	if got := ftg.deletedIDs(); len(got) != 1 {
+		t.Fatalf("deleted messages = %v, want one loading message", got)
 	}
 }
 

@@ -44,6 +44,7 @@ func main() {
 	var (
 		showVersion = flag.Bool("version", false, "print version and exit")
 		check       = flag.Bool("check", false, "validate configuration and connectivity, then exit")
+		simulate    = flag.String("simulate", "", "run a local Telegram simulation scenario (use \"list\" to see them)")
 	)
 	flag.Parse()
 
@@ -54,11 +55,23 @@ func main() {
 
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
+	if *simulate == "list" {
+		for _, name := range app.SimulationScenarios() {
+			fmt.Println(name)
+		}
+		return
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
 	cfg.Version = version
+
+	if *simulate != "" {
+		runSimulation(cfg, *simulate)
+		return
+	}
 
 	// Discover the OpenCode background service when explicit values are not
 	// supplied. This is best-effort: the daemon keeps retrying while it runs.
@@ -117,6 +130,30 @@ func main() {
 		log.Print("shutdown requested from Telegram")
 	}
 	log.Print("shutting down")
+}
+
+func runSimulation(cfg *config.Config, scenario string) {
+	bot, err := tgbotapi.NewBotAPI(cfg.Token)
+	if err != nil {
+		log.Fatalf("telegram authentication failed: %v", err)
+	}
+	log.Printf("authenticated as @%s", bot.Self.UserName)
+
+	wl, err := whitelist.New(cfg.AllowlistFile)
+	if err != nil {
+		log.Fatalf("allowlist: %v", err)
+	}
+	st, err := settings.Open(cfg.SettingsFile)
+	if err != nil {
+		log.Fatalf("settings: %v", err)
+	}
+
+	a := app.New(cfg, bot, occlient.New("", "", cfg.HTTPTimeout), wl, st, version)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := a.RunSimulation(ctx, scenario); err != nil {
+		log.Fatalf("simulation: %v", err)
+	}
 }
 
 func checkOnly(cfg *config.Config, oc *occlient.Client) {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -135,6 +136,21 @@ func (a *App) handleCommand(chatID, userID int64, text string) {
 	case "/unbind":
 		a.setBinding(chatID, "")
 		a.send(chatID, "🔓 Unbound. Session notifications are unaffected.")
+	case "/agents", "/agent":
+		sessionID := a.binding(chatID)
+		if sessionID == "" {
+			a.send(chatID, "No session bound. Send /sessions to pick one.")
+			return
+		}
+		if len(args) > 0 {
+			a.switchAgentFromCommand(chatID, sessionID, args[0])
+			return
+		}
+		a.showAgents(chatID)
+	case "/models", "/model":
+		a.showModels(chatID)
+	case "/usage":
+		a.showUsage(chatID)
 	case "/notify":
 		a.commandNotify(chatID, args)
 	case "/interrupt", "/stop":
@@ -165,6 +181,9 @@ func (a *App) helpText() string {
 		"/sessions — list recent sessions and bind one",
 		"/bind <id> — bind this chat to a session",
 		"/unbind — remove the binding",
+		"/agents [id] — list or switch the bound session's agent",
+		"/models — list all available chat models",
+		"/usage — show OpenCode Go and Console usage limits",
 		"/interrupt — stop the bound session's current run",
 		"/notify on|off — enable or disable notifications",
 		"/settings — show notification settings",
@@ -410,7 +429,7 @@ func (a *App) handleCallbackFrom(chatID int64, messageID int, data string) {
 	}
 	if act.ChatID != 0 && act.ChatID != chatID {
 		switch act.Kind {
-		case "daemon_exit", "poweroff", "confirm_cancel":
+		case "agent", "model", "daemon_exit", "poweroff", "confirm_cancel":
 			a.send(chatID, "⚠️ This button belongs to another chat.")
 			return
 		}
@@ -433,6 +452,10 @@ func (a *App) handleCallbackFrom(chatID int64, messageID int, data string) {
 	case "bind_reply":
 		a.setBinding(chatID, act.SessionID)
 		a.send(chatID, fmt.Sprintf("🔗 Bound to %s.\nType your message now.", a.sessionLabel(act.SessionID)))
+	case "agent":
+		a.switchAgent(chatID, messageID, act.SessionID, act.Value)
+	case "model":
+		a.switchModel(chatID, messageID, act.SessionID, act.Decision, act.Value)
 	case "show_thinking":
 		a.showThinking(chatID, act)
 	case "summarize_thinking":
@@ -483,8 +506,71 @@ func (a *App) send(chatID int64, text string) {
 	a.sendMarkup(chatID, text, tgbotapi.InlineKeyboardMarkup{})
 }
 
+// startLoading sends a temporary status message and returns a function that
+// removes it. Callers remove it before sending the real result so the chat does
+// not keep both messages.
+func (a *App) startLoading(chatID int64, text string) func() {
+	msg, err := a.sendMarkup(chatID, text, tgbotapi.InlineKeyboardMarkup{})
+	if err != nil {
+		return func() {}
+	}
+	return func() { a.deleteMessage(chatID, msg.MessageID) }
+}
+
+// startDelayedLoading only shows a loading message when an operation takes
+// longer than the delay. The returned stop function removes that message and
+// waits for the delayed sender, so it is safe to call from a normal code path.
+func (a *App) startDelayedLoading(chatID int64, text string, delay time.Duration) func() {
+	cancel := make(chan struct{})
+	result := make(chan int, 1)
+	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			msg, err := a.sendMarkup(chatID, text, tgbotapi.InlineKeyboardMarkup{})
+			if err != nil {
+				result <- 0
+				return
+			}
+			result <- msg.MessageID
+		case <-cancel:
+			result <- 0
+		}
+	}()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(cancel)
+			if id := <-result; id > 0 {
+				a.deleteMessage(chatID, id)
+			}
+		})
+	}
+}
+
+func (a *App) deleteMessage(chatID int64, messageID int) {
+	if messageID == 0 {
+		return
+	}
+	if _, err := a.bot.Request(tgbotapi.NewDeleteMessage(chatID, messageID)); err != nil {
+		log.Printf("failed to delete message %d in chat %d: %v", messageID, chatID, err)
+	}
+}
+
 func (a *App) sendMarkup(chatID int64, text string, markup tgbotapi.InlineKeyboardMarkup) (tgbotapi.Message, error) {
-	msg := tgbotapi.NewMessage(chatID, truncateText(text, maxTelegramText))
+	text = truncateText(text, maxTelegramText)
+	sent, err := a.sendRichMarkup(chatID, text, markup)
+	if err == nil {
+		return sent, nil
+	}
+	logRichFallback("send", chatID, err)
+	return a.sendPlainMarkup(chatID, text, markup)
+}
+
+func (a *App) sendPlainMarkup(chatID int64, text string, markup tgbotapi.InlineKeyboardMarkup) (tgbotapi.Message, error) {
+	msg := tgbotapi.NewMessage(chatID, text)
 	msg.DisableWebPagePreview = true
 	if len(markup.InlineKeyboard) > 0 {
 		msg.ReplyMarkup = markup
@@ -496,14 +582,29 @@ func (a *App) sendMarkup(chatID int64, text string, markup tgbotapi.InlineKeyboa
 	return sent, err
 }
 
+func emptyInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
+	// Telegram rejects a null inline_keyboard; clearing buttons requires an
+	// explicit empty array.
+	return tgbotapi.InlineKeyboardMarkup{
+		InlineKeyboard: make([][]tgbotapi.InlineKeyboardButton, 0),
+	}
+}
+
 func (a *App) editMarkup(chatID int64, messageID int, text string, markup *tgbotapi.InlineKeyboardMarkup) {
-	msg := tgbotapi.NewEditMessageText(chatID, messageID, truncateText(text, maxTelegramText))
+	text = truncateText(text, maxTelegramText)
+	if err := a.editRichMarkup(chatID, messageID, text, markup); err == nil {
+		return
+	} else {
+		logRichFallback("edit", chatID, err)
+	}
+
+	msg := tgbotapi.NewEditMessageText(chatID, messageID, text)
 	msg.DisableWebPagePreview = true
 	if markup != nil {
 		msg.ReplyMarkup = markup
 	} else {
 		// nil explicitly clears the existing keyboard.
-		empty := tgbotapi.NewInlineKeyboardMarkup()
+		empty := emptyInlineKeyboard()
 		msg.ReplyMarkup = &empty
 	}
 	if _, err := a.bot.Send(msg); err != nil {
@@ -512,7 +613,7 @@ func (a *App) editMarkup(chatID int64, messageID int, text string, markup *tgbot
 }
 
 func (a *App) editReplyMarkup(chatID int64, messageID int) {
-	empty := tgbotapi.NewInlineKeyboardMarkup()
+	empty := emptyInlineKeyboard()
 	_, _ = a.bot.Request(tgbotapi.NewEditMessageReplyMarkup(chatID, messageID, empty))
 }
 

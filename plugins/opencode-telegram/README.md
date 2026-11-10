@@ -16,8 +16,8 @@ adds a `/telegram` slash command and a palette command,
   or a preview with **Summarize output**;
 - whether raw thinking ends with a **Summarize thinking** button (on by
   default);
-- security switches for **custom answers** and **new messages** (both off by
-  default);
+- security switches for **custom answers**, **new messages**, and **model
+  switching** (all off by default);
 - send a test notification.
 
 Every change is applied immediately through the daemon's loopback API.
@@ -28,13 +28,18 @@ The plugin also adds a **✈ Telegram** item to the TUI footer status row (under
 the prompt, also visible on the home screen). It shows the master notification
 state at a glance:
 
-- **on** — notifications are enabled (green);
-- **off** — notifications are disabled (muted);
-- **?** — the daemon is unreachable (warning color).
+- **on** — the daemon is running and notifications are enabled (green);
+- **off** — notifications are disabled, or the daemon is not running (muted);
+- **…** — the plugin is starting the daemon or applying a change.
 
 Click or tap the icon to toggle notifications without opening the full
-settings picker. The icon refreshes every few seconds, so changes made with
-`/telegram` are reflected immediately.
+settings picker. If the daemon is not running, turning the icon on starts the
+service first and then enables notifications. The icon refreshes every few
+seconds, so changes made with `/telegram` are reflected immediately.
+
+Opening `/telegram` also starts a stopped daemon automatically, so the
+settings picker works without leaving OpenCode. If the service cannot be
+started, the dialog shows the command output to help diagnose it.
 
 ## Security switches
 
@@ -44,6 +49,7 @@ OpenCode Telegram deliberately separates *notifications* from *actions*:
 |---|---|---|
 | `allow_custom_form_answers` | off | Adds **“Type your own response”** to OpenCode questions, so arbitrary text can be sent back into a form. |
 | `allow_new_messages` | off | Lets free-text Telegram messages become prompts for the session bound to that chat. |
+| `allow_model_switching` | off | Lets `/models` change the model used by the bound session. When off, `/models` explains that model selection is disabled. |
 
 These are the only ways Telegram can inject content into OpenCode. If you do
 not fully trust every Telegram account and device with access to the bot, leave
@@ -80,7 +86,9 @@ it with plugin options or environment variables:
       "package": "/home/<you>/opencode-telegram/plugins/opencode-telegram",
       "options": {
         "daemonUrl": "http://127.0.0.1:8787",
-        "token": "optional-bearer-token"
+        "token": "optional-bearer-token",
+        "autoStart": false,
+        "startCommand": "opencode-telegram start"
       }
     }
   ]
@@ -88,10 +96,17 @@ it with plugin options or environment variables:
 ```
 
 Environment fallbacks: `OPENCODE_TELEGRAM_URL`,
-`OPENCODE_TELEGRAM_TOKEN`.
+`OPENCODE_TELEGRAM_TOKEN`, `OPENCODE_TELEGRAM_AUTOSTART`,
+`OPENCODE_TELEGRAM_START_COMMAND`.
 
-If the daemon is not reachable, the plugin shows the URL it tried and suggests
-`opencode-telegram start`.
+`autoStart` (off by default) starts the service when the plugin loads, without
+changing the notification setting. `startCommand` overrides how the plugin
+launches the service; the default tries `opencode-telegram start`, the
+installed copy in `~/.local/bin`, `~/.local/share/opencode-telegram/scripts`,
+then the `opencode-telegram` systemd user unit.
+
+If the daemon cannot be started, the plugin reports the command output and
+suggests running `opencode-telegram start` manually to see the full log.
 
 ## Requirements
 

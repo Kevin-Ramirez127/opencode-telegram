@@ -185,13 +185,16 @@ func (a *App) generateSummary(sessionID, prompt string) (string, error) {
 // showThinking sends the raw reasoning blocks of the message the button was
 // created for.
 func (a *App) showThinking(chatID int64, act action) {
+	done := a.startLoading(chatID, "⏳ Loading thinking…")
 	msg, err := a.messageForAction(act)
 	if err != nil {
+		done()
 		a.send(chatID, fmt.Sprintf("❌ Could not read the thinking: %v", err))
 		return
 	}
 	reasoning := msg.ReasoningParts()
 	if len(reasoning) == 0 {
+		done()
 		a.send(chatID, "No thinking found for this message.")
 		return
 	}
@@ -208,61 +211,74 @@ func (a *App) showThinking(chatID int64, act action) {
 			tgbotapi.NewInlineKeyboardButtonData("📝 Summarize thinking", callbackData(token)),
 		})
 	}
+	done()
 	a.sendPartsToChatWithMarkup(chatID, contentMessages(header, reasoning), markup)
 }
 
 // summarizeThinking summarizes the reasoning of the message the button was
 // created for.
 func (a *App) summarizeThinking(chatID int64, act action) {
+	done := a.startLoading(chatID, "⏳ Summarizing thinking…")
 	msg, err := a.messageForAction(act)
 	if err != nil {
+		done()
 		a.send(chatID, fmt.Sprintf("❌ Could not read the thinking: %v", err))
 		return
 	}
 	reasoning := msg.ReasoningText()
 	if reasoning == "" {
+		done()
 		a.send(chatID, "No thinking found for this message.")
 		return
 	}
 
 	text, err := a.generateSummary(act.SessionID, thinkingSummaryPrompt+"\n\n---\n\n"+truncateText(reasoning, maxSummaryInput))
 	if err != nil {
+		done()
 		a.send(chatID, fmt.Sprintf("❌ Could not summarize the thinking: %v", err))
 		return
 	}
 	if text == "" {
+		done()
 		a.send(chatID, "OpenCode returned an empty summary.")
 		return
 	}
 
 	header := fmt.Sprintf("🧠 Thinking summary\nSession: %s", a.sessionLabel(act.SessionID))
+	done()
 	a.sendPartsToChat(chatID, contentMessages(header, []string{text}))
 }
 
 // summarizeOutput summarizes the assistant output of the message the button was
 // created for.
 func (a *App) summarizeOutput(chatID int64, act action) {
+	done := a.startLoading(chatID, "⏳ Summarizing output…")
 	msg, err := a.messageForAction(act)
 	if err != nil {
+		done()
 		a.send(chatID, fmt.Sprintf("❌ Could not read the output: %v", err))
 		return
 	}
 	output := msg.FinalText()
 	if output == "" {
+		done()
 		a.send(chatID, "No assistant output found for this message.")
 		return
 	}
 
 	text, err := a.generateSummary(act.SessionID, messageSummaryPrompt+"\n\n---\n\n"+truncateText(output, maxSummaryInput))
 	if err != nil {
+		done()
 		a.send(chatID, fmt.Sprintf("❌ Could not summarize the output: %v", err))
 		return
 	}
 	if text == "" {
+		done()
 		a.send(chatID, "OpenCode returned an empty summary.")
 		return
 	}
 
 	header := fmt.Sprintf("📄 Output summary\nSession: %s", a.sessionLabel(act.SessionID))
+	done()
 	a.sendPartsToChat(chatID, contentMessages(header, []string{text}))
 }
