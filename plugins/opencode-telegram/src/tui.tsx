@@ -43,6 +43,7 @@ type Notifications = {
 type Security = {
   allow_custom_form_answers: boolean
   allow_new_messages: boolean
+  allow_model_switching: boolean
 }
 
 type Settings = {
@@ -444,6 +445,11 @@ async function toggleSecurity(
       message =
         "This lets any allowlisted Telegram user send arbitrary prompts to the OpenCode session bound to their chat. Only enable it if you trust every account and device that can reach this bot."
     }
+    if (key === "allow_model_switching") {
+      title = "Allow model switching?"
+      message =
+        "This lets any allowlisted Telegram user change the model used by the bound OpenCode session with /models. Only enable it if you trust every account and device that can reach this bot."
+    }
     const confirm = await context.ui.dialog.confirm({
       title,
       message,
@@ -534,6 +540,11 @@ function buildOptions(settings: Settings, status: Status | undefined): Choice[] 
       description: "Allow free-text Telegram messages to become OpenCode prompts; off by default",
     },
     {
+      title: `Security: model switching ${stateLabel(s.allow_model_switching)}`,
+      value: "toggle_model_switching",
+      description: "Allow /models to change the bound session's model; off by default",
+    },
+    {
       title: "Send a test notification",
       value: "test",
       description: "Ask the daemon to message every allowlisted chat",
@@ -588,6 +599,12 @@ async function handleChoice(context: Context, value: string): Promise<boolean> {
       const data = await load(context)
       const current = data.settings.security.allow_new_messages
       await toggleSecurity(context, "allow_new_messages", !current)
+      return true
+    }
+    case "toggle_model_switching": {
+      const data = await load(context)
+      const current = data.settings.security.allow_model_switching
+      await toggleSecurity(context, "allow_model_switching", !current)
       return true
     }
     case "test": {

@@ -16,8 +16,8 @@ adds a `/telegram` slash command and a palette command,
   or a preview with **Summarize output**;
 - whether raw thinking ends with a **Summarize thinking** button (on by
   default);
-- security switches for **custom answers** and **new messages** (both off by
-  default);
+- security switches for **custom answers**, **new messages**, and **model
+  switching** (all off by default);
 - send a test notification.
 
 Every change is applied immediately through the daemon's loopback API.
@@ -49,6 +49,7 @@ OpenCode Telegram deliberately separates *notifications* from *actions*:
 |---|---|---|
 | `allow_custom_form_answers` | off | Adds **“Type your own response”** to OpenCode questions, so arbitrary text can be sent back into a form. |
 | `allow_new_messages` | off | Lets free-text Telegram messages become prompts for the session bound to that chat. |
+| `allow_model_switching` | off | Lets `/models` change the model used by the bound session. When off, `/models` explains that model selection is disabled. |
 
 These are the only ways Telegram can inject content into OpenCode. If you do
 not fully trust every Telegram account and device with access to the bot, leave

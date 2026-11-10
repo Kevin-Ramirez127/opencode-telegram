@@ -172,6 +172,7 @@ func newSimulationSettings() (*settings.Store, func(), error) {
 	next.Notifications.IncludeDirectory = true
 	next.Notifications.ShowSummarizeThinking = true
 	next.Security.AllowCustomFormAnswers = true
+	next.Security.AllowModelSwitching = true
 	if _, err := store.Replace(next); err != nil {
 		cleanup()
 		return nil, nil, err

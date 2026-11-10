@@ -125,7 +125,14 @@ func (a *App) switchAgentFromCommand(chatID int64, sessionID, agentID string) {
 	a.switchAgent(chatID, 0, sessionID, agentID)
 }
 
+const modelSwitchingDisabled = "⚠️ Your configuration does not allow choosing models from Telegram.\n\n" +
+	"Enable \"Security: model switching\" in the OpenCode Telegram plugin settings."
+
 func (a *App) showModels(chatID int64) {
+	if !a.settings.Get().Security.AllowModelSwitching {
+		a.send(chatID, modelSwitchingDisabled)
+		return
+	}
 	sessionID := a.binding(chatID)
 	if sessionID == "" {
 		a.send(chatID, "No session bound. Send /sessions to pick one.")
@@ -211,6 +218,10 @@ func (a *App) showModels(chatID int64) {
 }
 
 func (a *App) switchModel(chatID int64, messageID int, sessionID, providerID, modelID string) {
+	if !a.settings.Get().Security.AllowModelSwitching {
+		a.send(chatID, modelSwitchingDisabled)
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	model := occlient.ModelRef{ID: modelID, ProviderID: providerID}

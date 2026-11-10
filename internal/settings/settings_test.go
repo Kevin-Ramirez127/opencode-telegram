@@ -11,7 +11,7 @@ func TestDefaultsAreOff(t *testing.T) {
 	if d.Notifications.Enabled {
 		t.Fatal("notifications must be off by default")
 	}
-	if d.Security.AllowCustomFormAnswers || d.Security.AllowNewMessages {
+	if d.Security.AllowCustomFormAnswers || d.Security.AllowNewMessages || d.Security.AllowModelSwitching {
 		t.Fatal("security overrides must be off by default")
 	}
 	if !d.Notifications.SessionDone || !d.Notifications.QuestionAsked {
@@ -114,13 +114,16 @@ func TestPatchPersists(t *testing.T) {
 			Retry:       &on,
 			NotifyChats: &[]int64{123},
 		},
-		Security: &SecurityPatch{AllowNewMessages: &on, AllowCustomFormAnswers: &off},
+		Security: &SecurityPatch{AllowNewMessages: &on, AllowCustomFormAnswers: &off, AllowModelSwitching: &on},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !next.Notifications.Enabled || !next.Notifications.Retry || !next.Security.AllowNewMessages {
 		t.Fatal("patch was not applied")
+	}
+	if !next.Security.AllowModelSwitching {
+		t.Fatal("model switching patch was not applied")
 	}
 	if next.Security.AllowCustomFormAnswers {
 		t.Fatal("unset security field must stay false")

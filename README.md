@@ -195,7 +195,8 @@ notifications**). It edits `data/settings.json` through the daemon API:
   },
   "security": {
     "allow_custom_form_answers": false,
-    "allow_new_messages": false
+    "allow_new_messages": false,
+    "allow_model_switching": false
   }
 }
 ```
@@ -255,6 +256,7 @@ is single-use so repeated taps cannot start multiple generations.
 |---|---|---|
 | `allow_custom_form_answers` | `false` | Adds **“Type your own response”** to questions. Without it, only the options offered by the form (or answering inside OpenCode) are possible. |
 | `allow_new_messages` | `false` | Lets free-text Telegram messages become prompts for the chat's bound session. |
+| `allow_model_switching` | `false` | Lets `/models` change the model used by the bound session. Without it, `/models` explains that the configuration does not allow choosing models. |
 
 They are intentionally **not** exposed as Telegram commands: a compromised
 Telegram session must not be able to grant itself prompt-injection rights.
@@ -273,7 +275,7 @@ Change them from the plugin (which asks for confirmation) or by editing
 | `/bind <session-id>` | Bind this chat to a session |
 | `/unbind` | Remove the binding |
 | `/agents [agent-id]` | List or switch the bound session's agent |
-| `/models` | List every available chat model with a switch button for each |
+| `/models` | List every available chat model with a switch button for each (requires `allow_model_switching`) |
 | `/interrupt` | Interrupt the bound session's current run |
 | `/notify on\|off` | Toggle notification delivery |
 | `/settings` | Show current notification/security settings |
@@ -290,9 +292,11 @@ confirmation button is pressed. Cancel buttons dismiss the request.
 `/agents` lists the primary agents for the bound session and lets you switch
 with a button (or pass an agent id directly). `/models` lists every enabled
 chat model with one switch button per model, marking the model currently
-selected for the bound session. Both commands show a temporary loading message
-if the OpenCode API takes longer than 250 ms. Finished-session notifications
-include an `Agent:` line showing the agent that handled the run.
+selected for the bound session; it requires `allow_model_switching`, otherwise
+it replies that the configuration does not allow choosing models. Both commands
+show a temporary loading message if the OpenCode API takes longer than 250 ms.
+Finished-session notifications include an `Agent:` line showing the agent that
+handled the run.
 
 The daemon also adds its commands to the bot menu if they are missing. Existing
 bot commands are preserved, so commands registered with BotFather are not

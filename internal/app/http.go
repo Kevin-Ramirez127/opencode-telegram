@@ -109,8 +109,9 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 			return
 		}
-		log.Printf("plugin updated settings: notifications=%v custom_answers=%v new_messages=%v",
-			next.Notifications.Enabled, next.Security.AllowCustomFormAnswers, next.Security.AllowNewMessages)
+		log.Printf("plugin updated settings: notifications=%v custom_answers=%v new_messages=%v model_switching=%v",
+			next.Notifications.Enabled, next.Security.AllowCustomFormAnswers, next.Security.AllowNewMessages,
+			next.Security.AllowModelSwitching)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"settings": next,
 			"status":   a.snapshot(),

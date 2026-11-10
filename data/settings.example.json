@@ -16,6 +16,7 @@
   },
   "security": {
     "allow_custom_form_answers": false,
-    "allow_new_messages": false
+    "allow_new_messages": false,
+    "allow_model_switching": false
   }
 }

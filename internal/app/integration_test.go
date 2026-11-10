@@ -455,6 +455,7 @@ func TestAgentsCommandSwitchesAgent(t *testing.T) {
 func TestModelsCommandListsAvailableModels(t *testing.T) {
 	a, ftg, foc := newIntegrationApp(t)
 	a.setBinding(123, "ses_1")
+	allowModelSwitching(t, a)
 
 	a.handleCommand(123, 123, "/models")
 
@@ -498,11 +499,66 @@ func TestModelsCommandListsAvailableModels(t *testing.T) {
 
 func TestModelsCommandRequiresBoundSession(t *testing.T) {
 	a, ftg, _ := newIntegrationApp(t)
+	allowModelSwitching(t, a)
 
 	a.handleCommand(123, 123, "/models")
 
 	if got := ftg.lastText(); !strings.Contains(got, "No session bound") {
 		t.Fatalf("models feedback = %q", got)
+	}
+}
+
+func TestModelsCommandDisabledByConfiguration(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+	a.setBinding(123, "ses_1")
+
+	a.handleCommand(123, 123, "/models")
+
+	if got := ftg.lastText(); !strings.Contains(got, "does not allow choosing models") {
+		t.Fatalf("models disabled feedback = %q", got)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, act := range a.actions {
+		if act.Kind == "model" {
+			t.Fatal("model buttons must not be created while switching is disabled")
+		}
+	}
+}
+
+func TestModelSwitchBlockedAfterDisable(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	a.setBinding(123, "ses_1")
+	allowModelSwitching(t, a)
+	a.handleCommand(123, 123, "/models")
+	token, _ := findAction(t, a, "model", "gpt-6")
+
+	off := false
+	if _, err := a.settings.Patch(settings.Patch{
+		Security: &settings.SecurityPatch{AllowModelSwitching: &off},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.handleCallbackFrom(123, 42, callbackData(token))
+
+	if got := ftg.lastText(); !strings.Contains(got, "does not allow choosing models") {
+		t.Fatalf("stale model button feedback = %q", got)
+	}
+	foc.mu.Lock()
+	switched := foc.switchedModel
+	foc.mu.Unlock()
+	if switched.ID != "" {
+		t.Fatalf("model switched while disabled: %+v", switched)
+	}
+}
+
+func allowModelSwitching(t *testing.T, a *App) {
+	t.Helper()
+	on := true
+	if _, err := a.settings.Patch(settings.Patch{
+		Security: &settings.SecurityPatch{AllowModelSwitching: &on},
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
