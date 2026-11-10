@@ -483,8 +483,38 @@ func (a *App) send(chatID int64, text string) {
 	a.sendMarkup(chatID, text, tgbotapi.InlineKeyboardMarkup{})
 }
 
+// startLoading sends a temporary status message and returns a function that
+// removes it. Callers remove it before sending the real result so the chat does
+// not keep both messages.
+func (a *App) startLoading(chatID int64, text string) func() {
+	msg, err := a.sendMarkup(chatID, text, tgbotapi.InlineKeyboardMarkup{})
+	if err != nil {
+		return func() {}
+	}
+	return func() { a.deleteMessage(chatID, msg.MessageID) }
+}
+
+func (a *App) deleteMessage(chatID int64, messageID int) {
+	if messageID == 0 {
+		return
+	}
+	if _, err := a.bot.Request(tgbotapi.NewDeleteMessage(chatID, messageID)); err != nil {
+		log.Printf("failed to delete message %d in chat %d: %v", messageID, chatID, err)
+	}
+}
+
 func (a *App) sendMarkup(chatID int64, text string, markup tgbotapi.InlineKeyboardMarkup) (tgbotapi.Message, error) {
-	msg := tgbotapi.NewMessage(chatID, truncateText(text, maxTelegramText))
+	text = truncateText(text, maxTelegramText)
+	sent, err := a.sendRichMarkup(chatID, text, markup)
+	if err == nil {
+		return sent, nil
+	}
+	logRichFallback("send", chatID, err)
+	return a.sendPlainMarkup(chatID, text, markup)
+}
+
+func (a *App) sendPlainMarkup(chatID int64, text string, markup tgbotapi.InlineKeyboardMarkup) (tgbotapi.Message, error) {
+	msg := tgbotapi.NewMessage(chatID, text)
 	msg.DisableWebPagePreview = true
 	if len(markup.InlineKeyboard) > 0 {
 		msg.ReplyMarkup = markup
@@ -497,7 +527,14 @@ func (a *App) sendMarkup(chatID int64, text string, markup tgbotapi.InlineKeyboa
 }
 
 func (a *App) editMarkup(chatID int64, messageID int, text string, markup *tgbotapi.InlineKeyboardMarkup) {
-	msg := tgbotapi.NewEditMessageText(chatID, messageID, truncateText(text, maxTelegramText))
+	text = truncateText(text, maxTelegramText)
+	if err := a.editRichMarkup(chatID, messageID, text, markup); err == nil {
+		return
+	} else {
+		logRichFallback("edit", chatID, err)
+	}
+
+	msg := tgbotapi.NewEditMessageText(chatID, messageID, text)
 	msg.DisableWebPagePreview = true
 	if markup != nil {
 		msg.ReplyMarkup = markup

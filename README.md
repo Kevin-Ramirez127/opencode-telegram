@@ -214,8 +214,13 @@ often and usually should not page you.
 
 ### Long messages
 
-Telegram rejects messages over 4096 bytes. `long_message_mode` decides what the
-daemon does when the last assistant message would not fit:
+Notifications and bot replies are sent with Telegram `sendRichMessage`, so
+headings, lists, tables, links, and code blocks in OpenCode output render
+natively instead of appearing as raw Markdown. If the Telegram server does not
+support rich messages, the daemon falls back to plain text automatically.
+
+Telegram rejects regular messages over 4096 bytes. `long_message_mode` decides
+what the daemon does when the last assistant message would not fit:
 
 | Value | Behavior |
 |---|---|

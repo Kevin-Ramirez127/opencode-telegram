@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +25,8 @@ import (
 type fakeTelegram struct {
 	mu         sync.Mutex
 	texts      []string
+	richTexts  []string
+	deleted    []int
 	nextID     int
 	commands   []tgbotapi.BotCommand
 	registered []tgbotapi.BotCommand
@@ -51,12 +54,37 @@ func (f *fakeTelegram) handler(w http.ResponseWriter, r *http.Request) {
 		f.mu.Unlock()
 		_, _ = io.WriteString(w, `{"ok":true,"result":true}`)
 		return
+	case "deleteMessage":
+		_ = r.ParseForm()
+		var messageID int
+		_, _ = fmt.Sscanf(r.FormValue("message_id"), "%d", &messageID)
+		f.mu.Lock()
+		f.deleted = append(f.deleted, messageID)
+		f.mu.Unlock()
+		_, _ = io.WriteString(w, `{"ok":true,"result":true}`)
+		return
 	}
 	_ = r.ParseForm()
 	text := r.FormValue("text")
+	rich := r.FormValue("rich_message")
+	if text == "" && rich != "" {
+		var content struct {
+			Markdown string `json:"markdown"`
+			HTML     string `json:"html"`
+		}
+		if json.Unmarshal([]byte(rich), &content) == nil {
+			text = content.Markdown
+			if text == "" {
+				text = content.HTML
+			}
+		}
+	}
 	f.mu.Lock()
 	if text != "" {
 		f.texts = append(f.texts, text)
+	}
+	if rich != "" {
+		f.richTexts = append(f.richTexts, text)
 	}
 	f.nextID++
 	id := f.nextID
@@ -84,6 +112,18 @@ func (f *fakeTelegram) allTexts() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.texts...)
+}
+
+func (f *fakeTelegram) allRichTexts() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.richTexts...)
+}
+
+func (f *fakeTelegram) deletedIDs() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int(nil), f.deleted...)
 }
 
 func (f *fakeTelegram) registeredCommands() []tgbotapi.BotCommand {
@@ -258,6 +298,21 @@ func findAction(t *testing.T, a *App, kind, value string) (string, action) {
 	}
 	t.Fatalf("action kind=%q value=%q not found", kind, value)
 	return "", action{}
+}
+
+func TestSendAndEditUseRichMessages(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+
+	a.send(123, "**bold** output")
+	a.editMarkup(123, 1, "_edited_ output", nil)
+
+	rich := ftg.allRichTexts()
+	if len(rich) != 2 {
+		t.Fatalf("rich messages = %v, want 2", rich)
+	}
+	if rich[0] != "**bold** output" || rich[1] != "_edited_ output" {
+		t.Fatalf("rich messages = %v", rich)
+	}
 }
 
 func TestSessionDoneNotification(t *testing.T) {
@@ -456,6 +511,26 @@ func TestShowThinkingButton(t *testing.T) {
 
 	if !strings.Contains(ftg.allText(), "raw secret reasoning") {
 		t.Fatalf("raw thinking was not delivered:\n%s", ftg.allText())
+	}
+}
+
+func TestShowThinkingSendsAndDeletesLoading(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	foc.reasoning = "raw secret reasoning"
+
+	a.handleEvent(occlient.Event{
+		Type: "session.execution.succeeded",
+		Data: []byte(`{"sessionID":"ses_1"}`),
+	})
+	token, _ := findAction(t, a, "show_thinking", "")
+	a.handleCallback(123, callbackData(token))
+
+	all := ftg.allText()
+	if !strings.Contains(all, "Loading thinking") || !strings.Contains(all, "raw secret reasoning") {
+		t.Fatalf("missing loading or thinking content:\n%s", all)
+	}
+	if got := ftg.deletedIDs(); len(got) != 1 {
+		t.Fatalf("deleted messages = %v, want one loading message", got)
 	}
 }
 
