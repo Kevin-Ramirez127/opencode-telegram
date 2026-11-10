@@ -135,7 +135,7 @@ func (f *fakeOpenCode) handler(w http.ResponseWriter, r *http.Request) {
 			"title":    f.sessionTitle,
 			"outcome":  "succeeded",
 			"location": map[string]any{"directory": "/tmp/project"},
-			"time":     map[string]any{"created": 1, "updated": 61001},
+			"time":     map[string]any{"created": 1, "busy": 58001, "updated": 61001},
 		}})
 	case r.Method == http.MethodGet && r.URL.Path == "/api/session/ses_1/message":
 		writeFakeJSON(w, map[string]any{"data": []any{f.message()}})
@@ -267,7 +267,7 @@ func TestSessionDoneNotification(t *testing.T) {
 		Data: []byte(`{"sessionID":"ses_1"}`),
 	})
 	all := ftg.allText()
-	for _, want := range []string{"session finished", "Build the thing", "All changes are in."} {
+	for _, want := range []string{"session finished", "Build the thing", "All changes are in.", "Duration: 3s"} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("notification missing %q:\n%s", want, all)
 		}
