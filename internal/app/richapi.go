@@ -51,7 +51,7 @@ func (a *App) editRichMarkup(chatID int64, messageID int, text string, markup *t
 	}
 
 	// Rich messages need an explicit empty keyboard to remove old buttons.
-	empty := tgbotapi.NewInlineKeyboardMarkup()
+	empty := emptyInlineKeyboard()
 	if markup != nil {
 		if err := params.AddInterface("reply_markup", *markup); err != nil {
 			return fmt.Errorf("encode reply markup: %w", err)

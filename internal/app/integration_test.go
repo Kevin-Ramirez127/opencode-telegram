@@ -27,6 +27,7 @@ type fakeTelegram struct {
 	texts      []string
 	richTexts  []string
 	deleted    []int
+	lastMarkup string
 	nextID     int
 	commands   []tgbotapi.BotCommand
 	registered []tgbotapi.BotCommand
@@ -67,6 +68,7 @@ func (f *fakeTelegram) handler(w http.ResponseWriter, r *http.Request) {
 	_ = r.ParseForm()
 	text := r.FormValue("text")
 	rich := r.FormValue("rich_message")
+	markup := r.FormValue("reply_markup")
 	if text == "" && rich != "" {
 		var content struct {
 			Markdown string `json:"markdown"`
@@ -85,6 +87,9 @@ func (f *fakeTelegram) handler(w http.ResponseWriter, r *http.Request) {
 	}
 	if rich != "" {
 		f.richTexts = append(f.richTexts, text)
+	}
+	if markup != "" {
+		f.lastMarkup = markup
 	}
 	f.nextID++
 	id := f.nextID
@@ -124,6 +129,12 @@ func (f *fakeTelegram) deletedIDs() []int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]int(nil), f.deleted...)
+}
+
+func (f *fakeTelegram) lastReplyMarkup() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastMarkup
 }
 
 func (f *fakeTelegram) registeredCommands() []tgbotapi.BotCommand {
@@ -312,6 +323,16 @@ func TestSendAndEditUseRichMessages(t *testing.T) {
 	}
 	if rich[0] != "**bold** output" || rich[1] != "_edited_ output" {
 		t.Fatalf("rich messages = %v", rich)
+	}
+}
+
+func TestEditMarkupClearsButtonsWithArray(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+
+	a.editMarkup(123, 42, "Operation aborted.", nil)
+
+	if got := ftg.lastReplyMarkup(); got != `{"inline_keyboard":[]}` {
+		t.Fatalf("reply markup = %s, want an explicit empty array", got)
 	}
 }
 

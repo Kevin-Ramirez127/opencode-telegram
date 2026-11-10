@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -8,6 +9,16 @@ import (
 
 	"opencode-telegram/internal/occlient"
 )
+
+func TestEmptyInlineKeyboardEncodesArray(t *testing.T) {
+	data, err := json.Marshal(emptyInlineKeyboard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != `{"inline_keyboard":[]}` {
+		t.Fatalf("empty keyboard = %s, want an explicit empty array", data)
+	}
+}
 
 func TestFormatDuration(t *testing.T) {
 	cases := []struct {

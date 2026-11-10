@@ -526,6 +526,14 @@ func (a *App) sendPlainMarkup(chatID int64, text string, markup tgbotapi.InlineK
 	return sent, err
 }
 
+func emptyInlineKeyboard() tgbotapi.InlineKeyboardMarkup {
+	// Telegram rejects a null inline_keyboard; clearing buttons requires an
+	// explicit empty array.
+	return tgbotapi.InlineKeyboardMarkup{
+		InlineKeyboard: make([][]tgbotapi.InlineKeyboardButton, 0),
+	}
+}
+
 func (a *App) editMarkup(chatID int64, messageID int, text string, markup *tgbotapi.InlineKeyboardMarkup) {
 	text = truncateText(text, maxTelegramText)
 	if err := a.editRichMarkup(chatID, messageID, text, markup); err == nil {
@@ -540,7 +548,7 @@ func (a *App) editMarkup(chatID int64, messageID int, text string, markup *tgbot
 		msg.ReplyMarkup = markup
 	} else {
 		// nil explicitly clears the existing keyboard.
-		empty := tgbotapi.NewInlineKeyboardMarkup()
+		empty := emptyInlineKeyboard()
 		msg.ReplyMarkup = &empty
 	}
 	if _, err := a.bot.Send(msg); err != nil {
@@ -549,7 +557,7 @@ func (a *App) editMarkup(chatID int64, messageID int, text string, markup *tgbot
 }
 
 func (a *App) editReplyMarkup(chatID int64, messageID int) {
-	empty := tgbotapi.NewInlineKeyboardMarkup()
+	empty := emptyInlineKeyboard()
 	_, _ = a.bot.Request(tgbotapi.NewEditMessageReplyMarkup(chatID, messageID, empty))
 }
 
