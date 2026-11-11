@@ -91,7 +91,7 @@ daemon-only install leaves your OpenCode configuration untouched.
 # 1. Allowlist yourself (numeric IDs from @userinfobot)
 opencode-telegram config --adduser <your-user-id>
 
-# 2. Start the daemon
+# 2. Start the daemon (optional — the OpenCode plugin starts it when needed)
 opencode-telegram start
 opencode-telegram logs -f
 

@@ -354,7 +354,7 @@ if $DO_DAEMON; then
   step "Allowlist yourself (numeric IDs from @userinfobot):"
   echo "       opencode-telegram config --adduser <your-user-id>"
   echo
-  step "Start the daemon:"
+  step "Optionally start the daemon now (the OpenCode plugin starts it when needed):"
   echo "       opencode-telegram start"
   echo "       opencode-telegram logs -f"
   echo
