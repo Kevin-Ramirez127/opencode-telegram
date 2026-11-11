@@ -20,7 +20,8 @@ adds a `/telegram` slash command and a palette command,
   switching** (all off by default);
 - send a test notification.
 
-Every change is applied immediately through the daemon's loopback API.
+Every change is applied immediately through the daemon's loopback API and is
+reflected in every OpenCode window on the same host.
 
 ## Footer icon
 
@@ -34,8 +35,11 @@ state at a glance:
 
 Click or tap the icon to toggle notifications without opening the full
 settings picker. If the daemon is not running, turning the icon on starts the
-service first and then enables notifications. The icon refreshes every few
-seconds, so changes made with `/telegram` are reflected immediately.
+service first and then enables notifications. Changes are synchronized across
+OpenCode windows on the same host through OpenCode's plugin storage, so
+toggling the icon or `/telegram` in one window updates the others immediately.
+A periodic refresh remains as a fallback, and an open `/telegram` picker is
+reloaded when another window changes the settings.
 
 Opening `/telegram` also starts a stopped daemon automatically, so the
 settings picker works without leaving OpenCode. If the service cannot be
