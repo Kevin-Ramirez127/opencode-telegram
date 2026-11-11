@@ -1,6 +1,6 @@
 import { Plugin } from "@opencode/plugin/tui"
 import type { Context } from "@opencode/plugin/tui/context"
-import { createSignal } from "solid-js"
+import { createEffect, createRoot, createSignal } from "solid-js"
 
 const DEFAULT_DAEMON = "http://127.0.0.1:8787"
 const TELEGRAM_ICON = "✈"
@@ -314,6 +314,15 @@ function createNotificationStatus(context: Context) {
   let pending = false
   let version = 0
 
+  // OpenCode synchronizes plugin storage across every TUI instance on the
+  // same host. A revision counter lets the other windows refresh their footer
+  // (and any open settings picker) as soon as one window changes the daemon.
+  const [shared, updateShared] = context.storage.store("notifications", {
+    initial: { revision: 0 },
+  })
+  const listeners = new Set<() => void>()
+  let lastRevision = shared.revision
+
   const refresh = async () => {
     if (disposed) return
     if (refreshing) {
@@ -341,6 +350,35 @@ function createNotificationStatus(context: Context) {
       }
     }
   }
+
+  const notify = () => {
+    for (const listener of listeners) listener()
+  }
+
+  // Publish is best-effort: the daemon remains the source of truth, and the
+  // periodic refresh still catches up if writing the shared revision fails.
+  const publish = () => {
+    void updateShared((draft) => {
+      draft.revision += 1
+    }).catch(() => {})
+  }
+
+  const subscribe = (listener: () => void) => {
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
+    }
+  }
+
+  const disposeShared = createRoot((dispose) => {
+    createEffect(() => {
+      if (shared.revision === lastRevision) return
+      lastRevision = shared.revision
+      void refresh()
+      notify()
+    })
+    return dispose
+  })
 
   const toggle = async () => {
     if (busy()) return
@@ -372,6 +410,7 @@ function createNotificationStatus(context: Context) {
       version += 1
       setEnabled(next)
       setError(undefined)
+      publish()
       context.ui.toast.show({
         title: "OpenCode Telegram",
         message: started
@@ -396,9 +435,10 @@ function createNotificationStatus(context: Context) {
   const stop = () => {
     disposed = true
     clearInterval(timer)
+    disposeShared()
   }
 
-  return { enabled, busy, error, hovered, setHovered, toggle, refresh, stop }
+  return { enabled, busy, error, hovered, setHovered, toggle, refresh, publish, subscribe, stop }
 }
 
 type NotificationStatus = ReturnType<typeof createNotificationStatus>
@@ -556,13 +596,14 @@ function buildOptions(settings: Settings, status: Status | undefined): Choice[] 
   ]
 }
 
-async function handleChoice(context: Context, value: string): Promise<boolean> {
+async function handleChoice(context: Context, value: string, onChanged: () => void): Promise<boolean> {
   switch (value) {
     case "close":
       return false
     case "toggle_enabled": {
       const data = await load(context)
       await patchNotifications(context, { enabled: !data.settings.notifications.enabled })
+      onChanged()
       return true
     }
     case "toggle_session_done":
@@ -580,6 +621,7 @@ async function handleChoice(context: Context, value: string): Promise<boolean> {
       const current = data.settings.notifications[key]
       if (typeof current !== "boolean") return true
       await patchNotifications(context, { [key]: !current } as Partial<Notifications>)
+      onChanged()
       return true
     }
     case "toggle_long_message_mode": {
@@ -587,24 +629,25 @@ async function handleChoice(context: Context, value: string): Promise<boolean> {
       const next: LongMessageMode =
         data.settings.notifications.long_message_mode === "summary" ? "split" : "summary"
       await patchNotifications(context, { long_message_mode: next })
+      onChanged()
       return true
     }
     case "toggle_custom_answers": {
       const data = await load(context)
       const current = data.settings.security.allow_custom_form_answers
-      await toggleSecurity(context, "allow_custom_form_answers", !current)
+      if (await toggleSecurity(context, "allow_custom_form_answers", !current)) onChanged()
       return true
     }
     case "toggle_new_messages": {
       const data = await load(context)
       const current = data.settings.security.allow_new_messages
-      await toggleSecurity(context, "allow_new_messages", !current)
+      if (await toggleSecurity(context, "allow_new_messages", !current)) onChanged()
       return true
     }
     case "toggle_model_switching": {
       const data = await load(context)
       const current = data.settings.security.allow_model_switching
-      await toggleSecurity(context, "allow_model_switching", !current)
+      if (await toggleSecurity(context, "allow_model_switching", !current)) onChanged()
       return true
     }
     case "test": {
@@ -621,53 +664,78 @@ async function handleChoice(context: Context, value: string): Promise<boolean> {
   }
 }
 
-async function openSettings(context: Context, onChange?: () => void) {
-  for (;;) {
-    let data: SettingsResponse | undefined
-    try {
-      data = await load(context)
-    } catch (error) {
-      if (await daemonAlive(context)) {
-        await context.ui.dialog.alert({
-          title: "OpenCode Telegram",
-          message: `The daemon at ${daemonUrl(context)} did not answer correctly.\n\n${errText(error)}`,
-        })
-        return
-      }
+async function openSettings(context: Context, notificationStatus: NotificationStatus) {
+  let pickerOpen = false
+  let refreshRequested = false
 
-      // Opening the settings is an explicit "turn it on" action: bring the
-      // service up instead of asking the user to leave OpenCode.
+  // Another window changed the daemon settings while this picker was open.
+  // Close it so the loop below reloads and shows the new values instead of a
+  // stale snapshot.
+  const unsubscribe = notificationStatus.subscribe(() => {
+    if (!pickerOpen) return
+    refreshRequested = true
+    context.ui.dialog.clear()
+  })
+
+  try {
+    for (;;) {
+      let data: SettingsResponse | undefined
       try {
-        await ensureDaemon(context)
         data = await load(context)
-      } catch (startError) {
-        await context.ui.dialog.alert({
-          title: "OpenCode Telegram",
-          message:
-            `Could not reach the daemon at ${daemonUrl(context)} and could not start it.\n\n` +
-            `${errText(startError)}\n\n` +
-            `Run "opencode-telegram start" manually to see the full log.`,
-        })
-        return
+      } catch (error) {
+        if (await daemonAlive(context)) {
+          await context.ui.dialog.alert({
+            title: "OpenCode Telegram",
+            message: `The daemon at ${daemonUrl(context)} did not answer correctly.\n\n${errText(error)}`,
+          })
+          return
+        }
+
+        // Opening the settings is an explicit "turn it on" action: bring the
+        // service up instead of asking the user to leave OpenCode.
+        try {
+          await ensureDaemon(context)
+          data = await load(context)
+        } catch (startError) {
+          await context.ui.dialog.alert({
+            title: "OpenCode Telegram",
+            message:
+              `Could not reach the daemon at ${daemonUrl(context)} and could not start it.\n\n` +
+              `${errText(startError)}\n\n` +
+              `Run "opencode-telegram start" manually to see the full log.`,
+          })
+          return
+        }
+      }
+
+      if (!data) return
+      const daemonStatus = data.status
+      const subtitle = daemonStatus?.opencode_ok ? "OpenCode connected" : "OpenCode disconnected"
+      pickerOpen = true
+      const choice = await context.ui.dialog.select({
+        title: `OpenCode Telegram — ${subtitle}`,
+        options: buildOptions(data.settings, daemonStatus),
+      })
+      pickerOpen = false
+
+      if (refreshRequested) {
+        refreshRequested = false
+        // Let dialog.clear() settle before showing the picker again;
+        // otherwise the pending clear can close the new dialog too.
+        await sleep(0)
+        continue
+      }
+      if (!choice) return
+
+      try {
+        const again = await handleChoice(context, choice, notificationStatus.publish)
+        if (!again) return
+      } catch (error) {
+        await toastError(context, error)
       }
     }
-
-    if (!data) return
-    const status = data.status
-    const subtitle = status?.opencode_ok ? "OpenCode connected" : "OpenCode disconnected"
-    const choice = await context.ui.dialog.select({
-      title: `OpenCode Telegram — ${subtitle}`,
-      options: buildOptions(data.settings, status),
-    })
-    if (!choice) return
-
-    try {
-      const again = await handleChoice(context, choice)
-      onChange?.()
-      if (!again) return
-    } catch (error) {
-      await toastError(context, error)
-    }
+  } finally {
+    unsubscribe()
   }
 }
 
@@ -693,7 +761,7 @@ export default Plugin.define({
           palette: true,
           slash: { name: "telegram", aliases: ["tg"] },
           suggested: true,
-          run: () => openSettings(context, () => void status.refresh()),
+          run: () => openSettings(context, status),
         },
       ],
     }))
