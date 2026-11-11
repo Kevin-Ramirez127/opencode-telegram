@@ -62,7 +62,13 @@ not exposed through the Telegram bot itself.
 
 ## Loading
 
-Add the plugin to `opencode.json(c)` (project or global):
+The repository installer (`./install.sh`, or `./install.sh --plugin` for the
+plugin alone) copies this directory to
+`~/.local/share/opencode-telegram/plugins/opencode-telegram` and registers it
+in the global OpenCode config.
+
+To load a checkout by hand, add the plugin to `opencode.json(c)` (project or
+global):
 
 ```jsonc
 {

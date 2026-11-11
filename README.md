@@ -68,9 +68,24 @@ cd <this repo>
 ./install.sh
 ```
 
-The installer builds `bin/opencode-telegram`, installs a self-contained copy to
-`~/.local/share/opencode-telegram`, and creates the
-`~/.local/bin/opencode-telegram` command.
+By default the installer does two things:
+
+- builds `bin/opencode-telegram`, installs a self-contained copy to
+  `~/.local/share/opencode-telegram`, and creates the
+  `~/.local/bin/opencode-telegram` command;
+- copies the OpenCode plugin to
+  `~/.local/share/opencode-telegram/plugins/opencode-telegram` and registers it
+  in the global `~/.config/opencode/opencode.json(c)`.
+
+To install only one of them, pass a flag:
+
+```bash
+./install.sh --daemon    # daemon only
+./install.sh --plugin    # OpenCode plugin only
+```
+
+A plugin-only install does not need Go and leaves the daemon untouched; a
+daemon-only install leaves your OpenCode configuration untouched.
 
 ```bash
 # 1. Allowlist yourself (numeric IDs from @userinfobot)
@@ -161,17 +176,22 @@ Changes are reloaded automatically (SIGHUP is sent by the config command).
 
 ## Settings and the plugin
 
-Notifications are controlled from the OpenCode plugin:
+Notifications are controlled from the OpenCode plugin. `./install.sh` installs
+it and adds it to the global config automatically; this entry is what it
+writes:
 
 ```jsonc
 // ~/.config/opencode/opencode.jsonc
 {
   "$schema": "https://opencode.ai/config.json",
   "plugins": [
-    "/home/<you>/opencode-telegram/plugins/opencode-telegram"
+    "/home/<you>/.local/share/opencode-telegram/plugins/opencode-telegram"
   ]
 }
 ```
+
+To load an uninstalled checkout instead (for plugin development), point the
+entry at the repository: `/home/<you>/opencode-telegram/plugins/opencode-telegram`.
 
 Then run `/telegram` in the TUI (or the palette command **OpenCode Telegram
 notifications**). It edits `data/settings.json` through the daemon API:
