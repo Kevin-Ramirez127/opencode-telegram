@@ -150,6 +150,35 @@ canonical_path() {
   fi
 }
 
+tty_available() { { : </dev/tty; } 2>/dev/null; }
+
+# Ask for the token on the controlling terminal. Input is visible on purpose:
+# a silent prompt (read -s) looks frozen while pasting and hides typos, and
+# reading /dev/tty keeps it working when the script itself is piped into bash.
+prompt_token() {
+  local attempt=0 answer
+  TOKEN=""
+  while (( attempt < 3 )); do
+    attempt=$((attempt + 1))
+    printf 'Enter your Telegram bot token from @BotFather\n(paste with Ctrl+Shift+V or your terminal paste menu; visible input, empty to skip): ' >&2
+    if ! IFS= read -r answer < /dev/tty; then
+      echo >&2
+      return 0
+    fi
+    answer="$(printf '%s' "$answer" | tr -d '[:space:][:cntrl:]')"
+    if [[ -z "$answer" ]]; then
+      return 0
+    fi
+    if [[ "$answer" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]]; then
+      TOKEN="$answer"
+      return 0
+    fi
+    echo "warning: that does not look like a Telegram bot token (expected 123456789:ABC...); try again" >&2
+  done
+  echo "note: no valid token entered — skipping (re-run the installer or edit the .env)" >&2
+  return 0
+}
+
 register_plugin() {
   local cfg tmp entry src_entry resolved_src
   if [[ -f "$OPENCODE_CONFIG_DIR/opencode.jsonc" ]]; then
@@ -238,22 +267,17 @@ if $DO_DAEMON; then
     info "bot token already configured in installed .env (kept)"
   elif [[ "$NO_PROMPT" == "true" ]]; then
     info "no token configured — set TELEGRAM_BOT_TOKEN in $APP_DIR/.env later (--no-prompt given)"
-  elif [[ ! -t 0 ]]; then
+  elif ! tty_available; then
     info "no token configured — set TELEGRAM_BOT_TOKEN in $APP_DIR/.env later"
   else
-    printf 'Enter your Telegram bot token from @BotFather (empty to skip): ' >&2
-    token=""
-    read -rs token || true
-    echo >&2
-    token="$(printf '%s' "$token" | tr -d '[:space:]')"
-    if [[ -z "$token" ]]; then
-      info "skipped — set TELEGRAM_BOT_TOKEN in $APP_DIR/.env later"
-    else
-      [[ "$token" =~ ^[0-9]+:[A-Za-z0-9_-]+$ ]] || echo "warning: that does not look like a Telegram token" >&2
-      set_env_file_token "$APP_DIR/.env" "$token"
+    prompt_token
+    if [[ -n "$TOKEN" ]]; then
+      set_env_file_token "$APP_DIR/.env" "$TOKEN"
       info "bot token saved to installed .env (chmod 600)"
+    else
+      info "skipped — set TELEGRAM_BOT_TOKEN in $APP_DIR/.env later"
     fi
-    unset token
+    unset TOKEN
   fi
 
   # --- 7. wrapper -------------------------------------------------------------
