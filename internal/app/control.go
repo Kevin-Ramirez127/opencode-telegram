@@ -18,19 +18,40 @@ var botCommands = []tgbotapi.BotCommand{
 	{Command: "start", Description: "Show the command list"},
 	{Command: "help", Description: "Show the command list"},
 	{Command: "status", Description: "Daemon and OpenCode status"},
-	{Command: "sessions", Description: "List recent sessions and bind one"},
+	{Command: "sessions", Description: "List sessions with bind buttons"},
 	{Command: "bind", Description: "Bind this chat to a session"},
 	{Command: "unbind", Description: "Remove the session binding"},
 	{Command: "agents", Description: "List or switch the bound session's agent"},
 	{Command: "models", Description: "List all available chat models"},
 	{Command: "usage", Description: "Show OpenCode Go and Console usage limits"},
+	{Command: "lastmessage", Description: "Show the bound session's last assistant message"},
 	{Command: "interrupt", Description: "Stop the bound session's current run"},
-	{Command: "notify", Description: "Enable or disable notifications"},
-	{Command: "settings", Description: "Show notification settings"},
+	{Command: "notify", Description: "Show or change notification delivery"},
+	{Command: "settings", Description: "Show notification and security settings"},
 	{Command: "test", Description: "Send a test notification"},
 	{Command: "id", Description: "Show your Telegram user and chat ids"},
 	{Command: "exit", Description: "Stop the opencode-telegram daemon"},
 	{Command: "poweroff", Description: "Power off this computer"},
+}
+
+// botCommandList adds commands that depend on the current security settings.
+// /new can inject a session into OpenCode, so it follows the same switch as
+// free-text prompts.
+func (a *App) botCommandList() []tgbotapi.BotCommand {
+	commands := append([]tgbotapi.BotCommand(nil), botCommands...)
+	if a.settings.Get().Security.AllowNewMessages {
+		commands = append(commands, tgbotapi.BotCommand{
+			Command:     "new",
+			Description: "Create a new session and bind it",
+		})
+	}
+	return commands
+}
+
+func (a *App) refreshBotCommands() {
+	if a.bot != nil {
+		go a.ensureBotCommands()
+	}
 }
 
 // RequestShutdown asks main to stop the daemon. It is safe to call repeatedly.
@@ -43,28 +64,53 @@ func (a *App) Done() <-chan struct{} {
 	return a.quit
 }
 
-// ensureBotCommands adds missing commands to the bot menu without replacing
-// commands that are already registered.
+// ensureBotCommands reconciles the bot menu while preserving commands and
+// descriptions that were registered by the operator. Settings-gated daemon
+// commands such as /new are removed again when their switch is turned off.
 func (a *App) ensureBotCommands() {
 	existing, err := a.bot.GetMyCommands()
 	if err != nil {
 		log.Printf("could not read bot commands: %v", err)
 	}
 
-	known := make(map[string]bool, len(existing))
-	for _, cmd := range existing {
-		known[cmd.Command] = true
+	desired := a.botCommandList()
+	desiredByName := make(map[string]tgbotapi.BotCommand, len(desired))
+	daemonNames := make(map[string]bool, len(botCommands)+1)
+	for _, cmd := range botCommands {
+		daemonNames[cmd.Command] = true
+	}
+	// /new is always a daemon command, even while its setting hides it.
+	daemonNames["new"] = true
+	for _, cmd := range desired {
+		desiredByName[cmd.Command] = cmd
 	}
 
-	merged := append([]tgbotapi.BotCommand(nil), existing...)
-	for _, cmd := range botCommands {
+	merged := make([]tgbotapi.BotCommand, 0, len(existing)+len(desired))
+	known := make(map[string]bool, len(existing)+len(desired))
+	for _, cmd := range existing {
+		if !daemonNames[cmd.Command] {
+			merged = append(merged, cmd)
+			known[cmd.Command] = true
+			continue
+		}
+		want, ok := desiredByName[cmd.Command]
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(cmd.Description) == "" {
+			cmd.Description = want.Description
+		}
+		merged = append(merged, cmd)
+		known[cmd.Command] = true
+	}
+	for _, cmd := range desired {
 		if known[cmd.Command] {
 			continue
 		}
 		merged = append(merged, cmd)
 		known[cmd.Command] = true
 	}
-	if len(merged) == len(existing) {
+	if sameBotCommands(existing, merged) {
 		return
 	}
 
@@ -73,6 +119,18 @@ func (a *App) ensureBotCommands() {
 		return
 	}
 	log.Printf("registered %d bot commands", len(merged))
+}
+
+func sameBotCommands(a, b []tgbotapi.BotCommand) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *App) commandExit(chatID int64) {

@@ -162,6 +162,8 @@ type fakeOpenCode struct {
 	generated     string
 	summaryPrompt string
 	prompt        string
+	sessions      []occlient.Session
+	createdDir    string
 }
 
 func (f *fakeOpenCode) message() map[string]any {
@@ -202,6 +204,28 @@ func (f *fakeOpenCode) handler(w http.ResponseWriter, r *http.Request) {
 			"location": map[string]any{"directory": "/tmp/project"},
 			"time":     map[string]any{"created": 1, "busy": 58001, "updated": 61001},
 		}})
+	case r.Method == http.MethodGet && r.URL.Path == "/api/session":
+		f.mu.Lock()
+		sessions := append([]occlient.Session(nil), f.sessions...)
+		f.mu.Unlock()
+		writeFakeJSON(w, map[string]any{"data": sessions})
+	case r.Method == http.MethodPost && r.URL.Path == "/api/session":
+		var body struct {
+			Location struct {
+				Directory string `json:"directory"`
+			} `json:"location"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		sess := occlient.Session{
+			ID:       "ses_new",
+			Title:    "Fresh session",
+			Location: occlient.Location{Directory: body.Location.Directory},
+		}
+		f.mu.Lock()
+		f.createdDir = body.Location.Directory
+		f.sessions = append([]occlient.Session{sess}, f.sessions...)
+		f.mu.Unlock()
+		writeFakeJSON(w, map[string]any{"data": sess})
 	case r.Method == http.MethodGet && r.URL.Path == "/api/agent":
 		f.mu.Lock()
 		agents := append([]occlient.AgentInfo(nil), f.agents...)
@@ -548,6 +572,226 @@ func TestModelsCommandDisabledByConfiguration(t *testing.T) {
 		if act.Kind == "model" {
 			t.Fatal("model buttons must not be created while switching is disabled")
 		}
+	}
+}
+
+func TestStartAndHelpShareMarkdownGuide(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+
+	a.handleCommand(123, 123, "/start")
+	start := ftg.lastText()
+	a.handleCommand(123, 123, "/help")
+	help := ftg.lastText()
+
+	if start != help {
+		t.Fatalf("/start and /help differ:\n--- start ---\n%s\n--- help ---\n%s", start, help)
+	}
+	for _, want := range []string{"**OpenCode Telegram**", "**Quick start**", "`/sessions`", "`/settings`"} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("help is missing %q:\n%s", want, help)
+		}
+	}
+	if strings.Contains(help, "`/new`") {
+		t.Fatalf("/new must be hidden while new messages are disabled:\n%s", help)
+	}
+
+	allowNewMessages(t, a)
+	a.handleCommand(123, 123, "/help")
+	if !strings.Contains(ftg.lastText(), "`/new`") {
+		t.Fatalf("/new missing after enabling new messages:\n%s", ftg.lastText())
+	}
+}
+
+func TestNewCommandIsHiddenFromBotMenuUntilEnabled(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+
+	a.ensureBotCommands()
+	if hasBotCommand(ftg.registeredCommands(), "new") {
+		t.Fatal("/new must not be registered while new messages are disabled")
+	}
+
+	ftg.commands = ftg.registeredCommands()
+	allowNewMessages(t, a)
+	a.ensureBotCommands()
+	if !hasBotCommand(ftg.registeredCommands(), "new") {
+		t.Fatal("/new was not registered after enabling new messages")
+	}
+
+	ftg.commands = ftg.registeredCommands()
+	off := false
+	if _, err := a.settings.Patch(settings.Patch{
+		Security: &settings.SecurityPatch{AllowNewMessages: &off},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	a.ensureBotCommands()
+	if hasBotCommand(ftg.registeredCommands(), "new") {
+		t.Fatal("/new must be removed after disabling new messages")
+	}
+}
+
+func hasBotCommand(commands []tgbotapi.BotCommand, name string) bool {
+	for _, cmd := range commands {
+		if cmd.Command == name {
+			return true
+		}
+	}
+	return false
+}
+
+func TestNewCommandRequiresNewMessages(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	a.setBinding(123, "ses_1")
+
+	a.handleCommand(123, 123, "/new")
+
+	if got := ftg.lastText(); !strings.Contains(got, "New sessions are disabled") {
+		t.Fatalf("disabled /new feedback = %q", got)
+	}
+	foc.mu.Lock()
+	defer foc.mu.Unlock()
+	if foc.createdDir != "" {
+		t.Fatalf("session created while disabled at %q", foc.createdDir)
+	}
+}
+
+func TestNewCommandCreatesAndBindsSession(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	a.setBinding(123, "ses_1")
+	allowNewMessages(t, a)
+
+	a.handleCommand(123, 123, "/new")
+
+	all := ftg.allText()
+	for _, want := range []string{"New session bound", "Fresh session", "`/tmp/project`"} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("new session feedback missing %q:\n%s", want, all)
+		}
+	}
+	if got := a.binding(123); got != "ses_new" {
+		t.Fatalf("binding = %q, want ses_new", got)
+	}
+	foc.mu.Lock()
+	createdAt := foc.createdDir
+	foc.mu.Unlock()
+	if createdAt != "/tmp/project" {
+		t.Fatalf("session created at %q, want the bound project", createdAt)
+	}
+}
+
+func TestNotifyShowsCurrentStateAndHowToSwitch(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+
+	a.handleCommand(123, 123, "/notify")
+	all := ftg.allText()
+	for _, want := range []string{"Notifications are on", "`/notify off`", "disable"} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("notify status missing %q:\n%s", want, all)
+		}
+	}
+
+	a.handleCommand(123, 123, "/notify off")
+	all = ftg.allText()
+	for _, want := range []string{"Notifications are now off", "`/notify on`", "enable"} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("notify change missing %q:\n%s", want, all)
+		}
+	}
+}
+
+func TestSessionsSendsOneMessagePerSession(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	foc.sessions = []occlient.Session{
+		{ID: "ses_1", Title: "Build the thing", Location: occlient.Location{Directory: "/tmp/project"}},
+		{ID: "ses_2", Title: "Write docs", Location: occlient.Location{Directory: "/tmp/docs"}},
+	}
+	a.setBinding(123, "ses_1")
+
+	a.handleCommand(123, 123, "/sessions")
+
+	texts := ftg.allTexts()
+	if len(texts) != 2 {
+		t.Fatalf("sent %d session messages, want 2:\n%s", len(texts), ftg.allText())
+	}
+	all := ftg.allText()
+	for _, want := range []string{
+		"**Build the thing**", "`/tmp/project`", "Currently bound",
+		"**Write docs**", "`/tmp/docs`",
+	} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("session listing missing %q:\n%s", want, all)
+		}
+	}
+
+	var binds, unbinds int
+	a.mu.Lock()
+	for _, act := range a.actions {
+		switch act.Kind {
+		case "bind":
+			if act.SessionID == "ses_2" {
+				binds++
+			}
+		case "unbind":
+			unbinds++
+		}
+	}
+	a.mu.Unlock()
+	if binds != 1 || unbinds != 1 {
+		t.Fatalf("bind actions = %d, unbind actions = %d; want 1 each", binds, unbinds)
+	}
+}
+
+func TestLastMessageCommandShowsBoundSessionMessage(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+	a.setBinding(123, "ses_1")
+
+	a.handleCommand(123, 123, "/lastmessage")
+
+	all := ftg.allText()
+	for _, want := range []string{"**📨 Last message**", "Build the thing", "All changes are in."} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("last message output missing %q:\n%s", want, all)
+		}
+	}
+}
+
+func TestLastMessageCommandRequiresBinding(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+
+	a.handleCommand(123, 123, "/lastmessage")
+
+	if got := ftg.lastText(); !strings.Contains(got, "No session bound") {
+		t.Fatalf("last message feedback = %q", got)
+	}
+}
+
+func TestSettingsUsesMarkdown(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+
+	a.handleCommand(123, 123, "/settings")
+
+	all := ftg.allText()
+	for _, want := range []string{
+		"**⚙️ Settings**",
+		"**Notifications**",
+		"- Enabled: **on**",
+		"**Security**",
+		"- Allow model switching: **off**",
+		"`/notify`",
+	} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("settings output missing %q:\n%s", want, all)
+		}
+	}
+}
+
+func allowNewMessages(t *testing.T, a *App) {
+	t.Helper()
+	on := true
+	if _, err := a.settings.Patch(settings.Patch{
+		Security: &settings.SecurityPatch{AllowNewMessages: &on},
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
