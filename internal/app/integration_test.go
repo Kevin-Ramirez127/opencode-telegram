@@ -450,7 +450,7 @@ func TestSessionDoneNotification(t *testing.T) {
 		Data: []byte(`{"sessionID":"ses_1"}`),
 	})
 	all := ftg.allText()
-	for _, want := range []string{"session finished", "Build the thing", "Agent: build", "All changes are in.", "Duration: 3s"} {
+	for _, want := range []string{"session finished", "Build the thing", "Agent: build", "Directory: `/tmp/project`", "All changes are in.", "Duration: 3s"} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("notification missing %q:\n%s", want, all)
 		}
@@ -575,7 +575,7 @@ func TestModelsCommandDisabledByConfiguration(t *testing.T) {
 	}
 }
 
-func TestStartAndHelpShareMarkdownGuide(t *testing.T) {
+func TestStartAndHelpHaveDistinctMarkdownContent(t *testing.T) {
 	a, ftg, _ := newIntegrationApp(t)
 
 	a.handleCommand(123, 123, "/start")
@@ -583,10 +583,15 @@ func TestStartAndHelpShareMarkdownGuide(t *testing.T) {
 	a.handleCommand(123, 123, "/help")
 	help := ftg.lastText()
 
-	if start != help {
-		t.Fatalf("/start and /help differ:\n--- start ---\n%s\n--- help ---\n%s", start, help)
+	if start == help {
+		t.Fatalf("/start and /help must not be identical:\n%s", start)
 	}
-	for _, want := range []string{"**OpenCode Telegram**", "**Quick start**", "`/sessions`", "`/settings`"} {
+	for _, want := range []string{"**👋 Welcome to OpenCode Telegram**", "**Quick start**", "`/sessions`", "`/help`"} {
+		if !strings.Contains(start, want) {
+			t.Fatalf("start guide is missing %q:\n%s", want, start)
+		}
+	}
+	for _, want := range []string{"**OpenCode Telegram — Help**", "**Commands**", "`/sessions`", "`/settings`"} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("help is missing %q:\n%s", want, help)
 		}
@@ -679,7 +684,7 @@ func TestNewCommandCreatesAndBindsSession(t *testing.T) {
 	}
 }
 
-func TestNotifyShowsCurrentStateAndHowToSwitch(t *testing.T) {
+func TestNotifyShowsCurrentStateWithToggleButtons(t *testing.T) {
 	a, ftg, _ := newIntegrationApp(t)
 
 	a.handleCommand(123, 123, "/notify")
@@ -689,13 +694,27 @@ func TestNotifyShowsCurrentStateAndHowToSwitch(t *testing.T) {
 			t.Fatalf("notify status missing %q:\n%s", want, all)
 		}
 	}
-
-	a.handleCommand(123, 123, "/notify off")
-	all = ftg.allText()
-	for _, want := range []string{"Notifications are now off", "`/notify on`", "enable"} {
-		if !strings.Contains(all, want) {
-			t.Fatalf("notify change missing %q:\n%s", want, all)
+	markup := ftg.lastReplyMarkup()
+	for _, want := range []string{"✅ Turn on", "Turn off"} {
+		if !strings.Contains(markup, want) {
+			t.Fatalf("notify buttons missing %q: %s", want, markup)
 		}
+	}
+
+	token, _ := findAction(t, a, "notify_toggle", "off")
+	a.handleCallbackFrom(123, 42, callbackData(token))
+
+	if got := ftg.lastText(); !strings.Contains(got, "Notifications are off") {
+		t.Fatalf("notify toggle feedback = %q", got)
+	}
+	markup = ftg.lastReplyMarkup()
+	for _, want := range []string{"Turn on", "✅ Turn off"} {
+		if !strings.Contains(markup, want) {
+			t.Fatalf("updated notify buttons missing %q: %s", want, markup)
+		}
+	}
+	if a.settings.Get().Notifications.Enabled {
+		t.Fatal("notifications should be disabled after pressing Turn off")
 	}
 }
 
@@ -742,8 +761,10 @@ func TestSessionsSendsOneMessagePerSession(t *testing.T) {
 }
 
 func TestLastMessageCommandShowsBoundSessionMessage(t *testing.T) {
-	a, ftg, _ := newIntegrationApp(t)
+	a, ftg, foc := newIntegrationApp(t)
 	a.setBinding(123, "ses_1")
+	foc.reasoning = "the reasoning behind it"
+	allowNewMessages(t, a)
 
 	a.handleCommand(123, 123, "/lastmessage")
 
@@ -751,6 +772,17 @@ func TestLastMessageCommandShowsBoundSessionMessage(t *testing.T) {
 	for _, want := range []string{"**📨 Last message**", "Build the thing", "All changes are in."} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("last message output missing %q:\n%s", want, all)
+		}
+	}
+	for _, kind := range []string{"summarize_output", "show_thinking", "bind_reply"} {
+		if _, act := findAction(t, a, kind, ""); act.Kind != kind {
+			t.Fatalf("last message action %q missing", kind)
+		}
+	}
+	markup := ftg.lastReplyMarkup()
+	for _, want := range []string{"Summarize output", "Show thinking", "Reply to this session"} {
+		if !strings.Contains(markup, want) {
+			t.Fatalf("last message buttons missing %q: %s", want, markup)
 		}
 	}
 }

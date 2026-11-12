@@ -290,7 +290,8 @@ Change them from the plugin (which asks for confirmation) or by editing
 
 | Command | Meaning |
 |---|---|
-| `/start`, `/help` | Markdown quick-start guide, command list, and security notes |
+| `/start` | Markdown introduction and quick-start guide |
+| `/help` | Markdown command list and security notes |
 | `/status` | Daemon, OpenCode, allowlist, and pending-work status |
 | `/sessions` | One message per recent session with its path and a bind button |
 | `/bind <session-id>` | Bind this chat to a session |
@@ -299,9 +300,9 @@ Change them from the plugin (which asks for confirmation) or by editing
 | `/agents [agent-id]` | List or switch the bound session's agent |
 | `/models` | List every available chat model with a switch button for each (requires `allow_model_switching`) |
 | `/usage` | Show OpenCode Go and Console usage limits |
-| `/lastmessage` | Show the bound session's last assistant message |
+| `/lastmessage` | Show the bound session's last assistant message, with summarize, thinking, and reply buttons |
 | `/interrupt` | Interrupt the bound session's current run |
-| `/notify` | Show notification delivery status and the command to switch it |
+| `/notify` | Show notification status with tappable Turn on / Turn off buttons |
 | `/notify on\|off` | Toggle notification delivery |
 | `/settings` | Show current notification/security settings |
 | `/test` | Send a test notification to the allowed chats |
@@ -328,7 +329,13 @@ rolling/weekly/monthly OpenCode Go percentages, reset times, and any Console
 budgets as Markdown tables. API failures are reported in the chat.
 
 `/lastmessage` prints the most recent assistant text from the bound session. It
-is read-only and always available once a session is bound.
+is read-only and always available once a session is bound. The message reuses
+the notification actions: **Summarize output**, **Show thinking** when the
+message has reasoning, and **Reply to this session** when `allow_new_messages`
+is on.
+
+`/notify` without an argument shows the current delivery state and two buttons,
+**Turn on** and **Turn off**, with a check mark on the active state.
 
 `/new` creates a session in the bound session's project and binds this chat to
 it. Without a binding it uses the most recent session's directory, then the

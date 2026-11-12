@@ -88,7 +88,7 @@ func (a *App) notifySession(sessionID, kind, detail string) {
 	}
 	fmt.Fprintf(&b, "Agent: %s\n", agent)
 	if n.IncludeDirectory && sess.Location.Directory != "" {
-		fmt.Fprintf(&b, "Directory: %s\n", sess.Location.Directory)
+		fmt.Fprintf(&b, "Directory: `%s`\n", sess.Location.Directory)
 	}
 	if kind == "idle" {
 		b.WriteString("Outcome: idle\n")

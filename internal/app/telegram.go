@@ -118,7 +118,9 @@ func (a *App) handleCommand(chatID, userID int64, text string) {
 	args := fields[1:]
 
 	switch cmd {
-	case "/start", "/help", "/menu":
+	case "/start":
+		a.send(chatID, a.startText())
+	case "/help", "/menu":
 		a.send(chatID, a.helpText())
 	case "/status", "/where":
 		a.showStatus(chatID)
@@ -175,9 +177,26 @@ func (a *App) handleCommand(chatID, userID int64, text string) {
 	}
 }
 
+func (a *App) startText() string {
+	return strings.Join([]string{
+		"**👋 Welcome to OpenCode Telegram**",
+		"",
+		"This bot connects OpenCode to Telegram. It tells you when a session finishes, fails, asks a question, or requests permission, so you can follow your work without staying at the computer.",
+		"",
+		"**Quick start**",
+		"1. Send `/sessions` and tap **Bind this session** on the one you want.",
+		"2. Send a message to prompt the bound session.",
+		"3. Answer questions and permissions with the buttons OpenCode sends you.",
+		"",
+		"> Sending messages and creating sessions require **Allow new messages** in the OpenCode Telegram plugin.",
+		"",
+		"Send `/help` for the full command list.",
+	}, "\n")
+}
+
 func (a *App) helpText() string {
 	lines := []string{
-		"**OpenCode Telegram**",
+		"**OpenCode Telegram — Help**",
 		"",
 		"I notify you when an OpenCode session finishes, fails, asks a question, or requests a permission.",
 		"",
@@ -326,7 +345,11 @@ func (a *App) bindSession(chatID int64, sessionID string) {
 	}
 	a.rememberSession(sess)
 	a.setBinding(chatID, sess.ID)
-	a.send(chatID, fmt.Sprintf("🔗 Bound to: %s\n%s", sess.DisplayTitle(), sess.Location.Directory))
+	directory := strings.TrimSpace(sess.Location.Directory)
+	if directory == "" {
+		directory = "default location"
+	}
+	a.send(chatID, fmt.Sprintf("**🔗 Bound to %s**\n📁 `%s`", sess.DisplayTitle(), directory))
 }
 
 func (a *App) showLastMessage(chatID int64) {
@@ -341,18 +364,30 @@ func (a *App) showLastMessage(chatID int64) {
 	if sess, err := a.oc.GetSession(ctx, sessionID); err == nil {
 		a.rememberSession(sess)
 	}
-	text, err := a.oc.LastAssistantText(ctx, sessionID)
+	msg, ok, err := a.oc.LastAssistantMessage(ctx, sessionID)
 	if err != nil {
 		a.send(chatID, fmt.Sprintf("❌ Could not read the last message: %v", err))
 		return
 	}
-	if strings.TrimSpace(text) == "" {
+	if !ok {
+		a.send(chatID, "No assistant message found for this session yet.")
+		return
+	}
+
+	text := msg.FinalText()
+	hasThinking := msg.HasReasoning()
+	if strings.TrimSpace(text) == "" && !hasThinking {
 		a.send(chatID, "No assistant message found for this session yet.")
 		return
 	}
 
 	header := fmt.Sprintf("**📨 Last message**\nSession: %s", a.sessionLabel(sessionID))
-	a.sendPartsToChat(chatID, contentMessages(header, []string{text}))
+	var blocks []string
+	if strings.TrimSpace(text) != "" {
+		blocks = append(blocks, text)
+	}
+	markup := a.notificationMarkup(sessionID, msg.ID, strings.TrimSpace(text) != "", hasThinking)
+	a.sendPartsToChatWithMarkup(chatID, contentMessages(header, blocks), markup)
 }
 
 const newSessionDisabled = "⚠️ **New sessions are disabled.**\n\n" +
@@ -443,7 +478,8 @@ func (a *App) sessionLabel(sessionID string) string {
 
 func (a *App) commandNotify(chatID int64, args []string) {
 	if len(args) == 0 {
-		a.send(chatID, notifyStatusText(a.settings.Get().Notifications.Enabled, false))
+		enabled := a.settings.Get().Notifications.Enabled
+		a.sendMarkup(chatID, notifyStatusText(enabled, false), a.notifyMarkup(chatID, enabled))
 		return
 	}
 	if len(args) != 1 {
@@ -467,7 +503,41 @@ func (a *App) commandNotify(chatID int64, args []string) {
 		a.send(chatID, fmt.Sprintf("❌ Could not update settings: %v", err))
 		return
 	}
-	a.send(chatID, notifyStatusText(st.Notifications.Enabled, true))
+	a.sendMarkup(chatID, notifyStatusText(st.Notifications.Enabled, true), a.notifyMarkup(chatID, st.Notifications.Enabled))
+}
+
+func (a *App) notifyMarkup(chatID int64, enabled bool) tgbotapi.InlineKeyboardMarkup {
+	onLabel := "Turn on"
+	offLabel := "Turn off"
+	if enabled {
+		onLabel = "✅ " + onLabel
+	} else {
+		offLabel = "✅ " + offLabel
+	}
+	onToken := a.addAction(action{Kind: "notify_toggle", Value: "on", ChatID: chatID})
+	offToken := a.addAction(action{Kind: "notify_toggle", Value: "off", ChatID: chatID})
+	return tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData(onLabel, callbackData(onToken)),
+		tgbotapi.NewInlineKeyboardButtonData(offLabel, callbackData(offToken)),
+	))
+}
+
+func (a *App) setNotifyFromCallback(chatID int64, messageID int, value string) {
+	enabled := strings.EqualFold(value, "on")
+	st, err := a.settings.Patch(settings.Patch{
+		Notifications: &settings.NotificationsPatch{Enabled: &enabled},
+	})
+	if err != nil {
+		a.send(chatID, fmt.Sprintf("❌ Could not update settings: %v", err))
+		return
+	}
+	markup := a.notifyMarkup(chatID, st.Notifications.Enabled)
+	text := notifyStatusText(st.Notifications.Enabled, false)
+	if messageID > 0 {
+		a.editMarkup(chatID, messageID, text, &markup)
+		return
+	}
+	a.sendMarkup(chatID, text, markup)
 }
 
 func notifyStatusText(enabled, changed bool) string {
@@ -482,7 +552,7 @@ func notifyStatusText(enabled, changed bool) string {
 		state = "are now"
 	}
 	return fmt.Sprintf(
-		"**🔔 Notifications %s %s.**\n\nSend `/notify %s` to %s them.",
+		"**🔔 Notifications %s %s.**\n\nUse the buttons below, or send `/notify %s` to %s them.",
 		state, onOff(enabled), next, action,
 	)
 }
@@ -579,7 +649,7 @@ func (a *App) handleCallbackFrom(chatID int64, messageID int, data string) {
 	}
 	if act.ChatID != 0 && act.ChatID != chatID {
 		switch act.Kind {
-		case "agent", "model", "daemon_exit", "poweroff", "confirm_cancel":
+		case "agent", "model", "notify_toggle", "daemon_exit", "poweroff", "confirm_cancel":
 			a.send(chatID, "⚠️ This button belongs to another chat.")
 			return
 		}
@@ -597,6 +667,8 @@ func (a *App) handleCallbackFrom(chatID int64, messageID int, data string) {
 	}
 
 	switch act.Kind {
+	case "notify_toggle":
+		a.setNotifyFromCallback(chatID, messageID, act.Value)
 	case "bind":
 		a.bindFromCallback(chatID, act)
 	case "bind_reply":
