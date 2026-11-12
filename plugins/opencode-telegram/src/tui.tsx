@@ -483,7 +483,7 @@ async function toggleSecurity(
     if (key === "allow_new_messages") {
       title = "Allow new messages?"
       message =
-        "This lets any allowlisted Telegram user send arbitrary prompts to the OpenCode session bound to their chat. Only enable it if you trust every account and device that can reach this bot."
+        "This lets any allowlisted Telegram user send arbitrary prompts to the OpenCode session bound to their chat and create new sessions with /new. Only enable it if you trust every account and device that can reach this bot."
     }
     if (key === "allow_model_switching") {
       title = "Allow model switching?"

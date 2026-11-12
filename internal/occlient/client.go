@@ -385,6 +385,20 @@ func (c *Client) GetSession(ctx context.Context, sessionID string) (Session, err
 	return out.Data, err
 }
 
+// CreateSession creates a session at directory. An empty directory uses the
+// server's default location.
+func (c *Client) CreateSession(ctx context.Context, directory string) (Session, error) {
+	body := map[string]any{}
+	if dir := strings.TrimSpace(directory); dir != "" {
+		body["location"] = map[string]string{"directory": dir}
+	}
+	var out struct {
+		Data Session `json:"data"`
+	}
+	err := c.do(ctx, http.MethodPost, "/api/session", body, &out)
+	return out.Data, err
+}
+
 // ListAgents returns the agents registered for a location (usually the
 // session's working directory).
 func (c *Client) ListAgents(ctx context.Context, directory string) ([]AgentInfo, error) {

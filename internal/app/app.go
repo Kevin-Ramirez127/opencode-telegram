@@ -392,6 +392,7 @@ func (a *App) reloadAll() {
 		log.Printf("settings reload failed (keeping previous): %v", err)
 	} else {
 		log.Print("settings reloaded")
+		a.refreshBotCommands()
 	}
 }
 
@@ -408,6 +409,7 @@ func (a *App) reloadIfChanged() {
 			log.Printf("settings reload failed (keeping previous): %v", err)
 		} else {
 			log.Print("settings reloaded")
+			a.refreshBotCommands()
 		}
 	}
 }

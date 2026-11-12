@@ -92,7 +92,7 @@ func (a *App) startFormFlow(f occlient.Form) {
 	header := fmt.Sprintf("❓ OpenCode is asking a question\nTitle: %s\nSession: %s",
 		blank(f.Title, "(untitled form)"), a.sessionLabel(f.SessionID))
 	if dir := a.sessionSnapshot(f.SessionID).Directory; dir != "" {
-		header += "\nDirectory: " + dir
+		header += "\nDirectory: `" + dir + "`"
 	}
 	a.broadcast(header, tgbotapi.InlineKeyboardMarkup{})
 	a.sendNextField(flow)

@@ -52,7 +52,7 @@ OpenCode Telegram deliberately separates *notifications* from *actions*:
 | Setting | Default | What it enables |
 |---|---|---|
 | `allow_custom_form_answers` | off | Adds **“Type your own response”** to OpenCode questions, so arbitrary text can be sent back into a form. |
-| `allow_new_messages` | off | Lets free-text Telegram messages become prompts for the session bound to that chat. |
+| `allow_new_messages` | off | Lets free-text Telegram messages become prompts for the session bound to that chat, and enables `/new`. |
 | `allow_model_switching` | off | Lets `/models` change the model used by the bound session. When off, `/models` explains that model selection is disabled. |
 
 These are the only ways Telegram can inject content into OpenCode. If you do

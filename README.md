@@ -276,7 +276,7 @@ is single-use so repeated taps cannot start multiple generations.
 | Setting | Default | Effect |
 |---|---|---|
 | `allow_custom_form_answers` | `false` | Adds **“Type your own response”** to questions. Without it, only the options offered by the form (or answering inside OpenCode) are possible. |
-| `allow_new_messages` | `false` | Lets free-text Telegram messages become prompts for the chat's bound session. |
+| `allow_new_messages` | `false` | Lets free-text Telegram messages become prompts for the chat's bound session, and enables `/new`. |
 | `allow_model_switching` | `false` | Lets `/models` change the model used by the bound session. Without it, `/models` explains that the configuration does not allow choosing models. |
 
 They are intentionally **not** exposed as Telegram commands: a compromised
@@ -290,15 +290,19 @@ Change them from the plugin (which asks for confirmation) or by editing
 
 | Command | Meaning |
 |---|---|
-| `/start`, `/help` | Command list and security notes |
+| `/start` | Markdown introduction and quick-start guide |
+| `/help` | Markdown command list and security notes |
 | `/status` | Daemon, OpenCode, allowlist, and pending-work status |
-| `/sessions` | Recent sessions with bind buttons |
+| `/sessions` | One message per recent session with its path and a bind button |
 | `/bind <session-id>` | Bind this chat to a session |
+| `/new` | Create a new session and bind it (requires `allow_new_messages`) |
 | `/unbind` | Remove the binding |
 | `/agents [agent-id]` | List or switch the bound session's agent |
 | `/models` | List every available chat model with a switch button for each (requires `allow_model_switching`) |
 | `/usage` | Show OpenCode Go and Console usage limits |
+| `/lastmessage` | Show the bound session's last assistant message, with summarize, thinking, and reply buttons |
 | `/interrupt` | Interrupt the bound session's current run |
+| `/notify` | Show notification status with tappable Turn on / Turn off buttons |
 | `/notify on\|off` | Toggle notification delivery |
 | `/settings` | Show current notification/security settings |
 | `/test` | Send a test notification to the allowed chats |
@@ -324,12 +328,27 @@ handled the run.
 rolling/weekly/monthly OpenCode Go percentages, reset times, and any Console
 budgets as Markdown tables. API failures are reported in the chat.
 
+`/lastmessage` prints the most recent assistant text from the bound session. It
+is read-only and always available once a session is bound. The message reuses
+the notification actions: **Summarize output**, **Show thinking** when the
+message has reasoning, and **Reply to this session** when `allow_new_messages`
+is on.
+
+`/notify` without an argument shows the current delivery state and two buttons,
+**Turn on** and **Turn off**, with a check mark on the active state.
+
+`/new` creates a session in the bound session's project and binds this chat to
+it. Without a binding it uses the most recent session's directory, then the
+OpenCode server default. Like free-text prompts, `/new` requires
+`allow_new_messages`; while that switch is off the command is rejected and
+omitted from `/help` and the bot menu.
+
 The daemon also adds its commands to the bot menu if they are missing. Existing
 bot commands are preserved, so commands registered with BotFather are not
 overwritten.
 
-After `/sessions` + bind, free text is sent to that session **only when**
-`allow_new_messages` is on. Otherwise the bot replies with a reminder.
+After `/sessions` + bind (or `/new`), free text is sent to that session **only
+when** `allow_new_messages` is on. Otherwise the bot replies with a reminder.
 
 ### Question flow
 

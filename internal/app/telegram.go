@@ -11,6 +11,7 @@ import (
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
+	"opencode-telegram/internal/occlient"
 	"opencode-telegram/internal/settings"
 )
 
@@ -117,7 +118,9 @@ func (a *App) handleCommand(chatID, userID int64, text string) {
 	args := fields[1:]
 
 	switch cmd {
-	case "/start", "/help", "/menu":
+	case "/start":
+		a.send(chatID, a.startText())
+	case "/help", "/menu":
 		a.send(chatID, a.helpText())
 	case "/status", "/where":
 		a.showStatus(chatID)
@@ -129,10 +132,12 @@ func (a *App) handleCommand(chatID, userID int64, text string) {
 		a.showSessions(chatID)
 	case "/bind":
 		if len(args) == 0 {
-			a.send(chatID, "Usage: /bind <session-id>. Send /sessions to pick one.")
+			a.send(chatID, "Usage: `/bind <session-id>`\n\nSend `/sessions` to pick one.")
 			return
 		}
 		a.bindSession(chatID, args[0])
+	case "/new":
+		a.commandNew(chatID)
 	case "/unbind":
 		a.setBinding(chatID, "")
 		a.send(chatID, "🔓 Unbound. Session notifications are unaffected.")
@@ -151,6 +156,8 @@ func (a *App) handleCommand(chatID, userID int64, text string) {
 		a.showModels(chatID)
 	case "/usage":
 		a.showUsage(chatID)
+	case "/lastmessage":
+		a.showLastMessage(chatID)
 	case "/notify":
 		a.commandNotify(chatID, args)
 	case "/interrupt", "/stop":
@@ -170,31 +177,60 @@ func (a *App) handleCommand(chatID, userID int64, text string) {
 	}
 }
 
-func (a *App) helpText() string {
+func (a *App) startText() string {
 	return strings.Join([]string{
-		"OpenCode Telegram daemon",
+		"**👋 Welcome to OpenCode Telegram**",
 		"",
-		"I notify you when an OpenCode session finishes, fails, asks a question,",
-		"or requests a permission.",
+		"This bot connects OpenCode to Telegram. It tells you when a session finishes, fails, asks a question, or requests permission, so you can follow your work without staying at the computer.",
 		"",
-		"/status — daemon and OpenCode status",
-		"/sessions — list recent sessions and bind one",
-		"/bind <id> — bind this chat to a session",
-		"/unbind — remove the binding",
-		"/agents [id] — list or switch the bound session's agent",
-		"/models — list all available chat models",
-		"/usage — show OpenCode Go and Console usage limits",
-		"/interrupt — stop the bound session's current run",
-		"/notify on|off — enable or disable notifications",
-		"/settings — show notification settings",
-		"/test — send a test notification",
-		"/id — show your Telegram ids",
-		"/exit — stop the opencode-telegram daemon (asks first)",
-		"/poweroff — power off this computer (asks first)",
+		"**Quick start**",
+		"1. Send `/sessions` and tap **Bind this session** on the one you want.",
+		"2. Send a message to prompt the bound session.",
+		"3. Answer questions and permissions with the buttons OpenCode sends you.",
 		"",
-		"After binding, type a message to send it to that session (only when",
-		"'Allow new messages' is enabled in the OpenCode plugin).",
+		"> Sending messages and creating sessions require **Allow new messages** in the OpenCode Telegram plugin.",
+		"",
+		"Send `/help` for the full command list.",
 	}, "\n")
+}
+
+func (a *App) helpText() string {
+	lines := []string{
+		"**OpenCode Telegram — Help**",
+		"",
+		"I notify you when an OpenCode session finishes, fails, asks a question, or requests a permission.",
+		"",
+		"**Quick start**",
+		"1. Send `/sessions` and tap **Bind this session** on the one you want.",
+		"2. Send a message to prompt the bound session.",
+		"3. Send `/notify off` to pause notifications.",
+		"",
+		"> Sending messages requires **Allow new messages** in the OpenCode Telegram plugin.",
+		"",
+		"**Commands**",
+		"- `/start`, `/help` — show this guide",
+		"- `/status` — daemon and OpenCode status",
+		"- `/sessions` — list sessions with bind buttons",
+		"- `/bind <session-id>` — bind this chat to a session",
+		"- `/unbind` — remove the binding",
+	}
+	if a.settings.Get().Security.AllowNewMessages {
+		lines = append(lines, "- `/new` — create a new session and bind it")
+	}
+	lines = append(lines,
+		"- `/agents [agent-id]` — list or switch the bound session's agent",
+		"- `/models` — list all available chat models",
+		"- `/usage` — show OpenCode Go and Console usage limits",
+		"- `/lastmessage` — show the bound session's last assistant message",
+		"- `/interrupt` — stop the bound session's current run",
+		"- `/notify` — show or change notification delivery",
+		"- `/settings` — show notification and security settings",
+		"- `/test` — send a test notification",
+		"- `/id` — show your Telegram user and chat ids",
+		"- `/exit` — stop the opencode-telegram daemon (asks first)",
+		"- `/poweroff` — power off this computer (asks first)",
+	)
+	return strings.Join(lines, "\n")
 }
 
 func (a *App) showStatus(chatID int64) {
@@ -247,32 +283,51 @@ func (a *App) showSessions(chatID int64) {
 	}
 
 	bound := a.binding(chatID)
-	var b strings.Builder
-	b.WriteString("Recent sessions (tap to bind):\n")
-	rows := make([][]tgbotapi.InlineKeyboardButton, 0, len(sessions)+1)
-	for i, s := range sessions {
-		active := ""
+	boundInList := false
+	for _, s := range sessions {
+		isBound := s.ID == bound
+		if isBound {
+			boundInList = true
+		}
+
+		title := truncateOneLine(s.DisplayTitle(), 80)
+		if title == "" {
+			title = s.ID
+		}
+		directory := strings.TrimSpace(s.Location.Directory)
+		if directory == "" {
+			directory = "default location"
+		}
+
+		var b strings.Builder
+		fmt.Fprintf(&b, "**%s**\n", title)
+		fmt.Fprintf(&b, "📁 `%s`\n", directory)
 		if st := a.sessionSnapshot(s.ID); st.Busy {
-			active = " [running]"
+			b.WriteString("⚡ **Running now**\n")
 		}
-		fmt.Fprintf(&b, "%d. %s%s\n   %s\n", i+1, truncateOneLine(s.DisplayTitle(), 60), active, s.Location.Directory)
-		label := truncateOneLine(s.DisplayTitle(), 28)
-		if len(label) == 0 {
-			label = s.ID
+		if isBound {
+			b.WriteString("✅ **Currently bound**\n")
 		}
-		token := a.addAction(action{Kind: "bind", SessionID: s.ID, ChatID: chatID})
-		row := []tgbotapi.InlineKeyboardButton{
-			tgbotapi.NewInlineKeyboardButtonData(label, callbackData(token)),
+
+		var button tgbotapi.InlineKeyboardButton
+		if isBound {
+			token := a.addAction(action{Kind: "unbind", ChatID: chatID})
+			button = tgbotapi.NewInlineKeyboardButtonData("🔓 Unbind", callbackData(token))
+		} else {
+			token := a.addAction(action{Kind: "bind", SessionID: s.ID, ChatID: chatID})
+			button = tgbotapi.NewInlineKeyboardButtonData("🔗 Bind this session", callbackData(token))
 		}
-		rows = append(rows, row)
+		markup := tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(button))
+		a.sendMarkup(chatID, strings.TrimSpace(b.String()), markup)
 	}
-	if bound != "" {
+
+	if bound != "" && !boundInList {
 		token := a.addAction(action{Kind: "unbind", ChatID: chatID})
-		rows = append(rows, []tgbotapi.InlineKeyboardButton{
-			tgbotapi.NewInlineKeyboardButtonData("Unbind", callbackData(token)),
-		})
+		markup := tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("🔓 Unbind", callbackData(token)),
+		))
+		a.sendMarkup(chatID, fmt.Sprintf("**📌 Currently bound**\n%s", a.sessionLabel(bound)), markup)
 	}
-	a.sendMarkup(chatID, b.String(), tgbotapi.NewInlineKeyboardMarkup(rows...))
 }
 
 func (a *App) bindSession(chatID int64, sessionID string) {
@@ -290,7 +345,111 @@ func (a *App) bindSession(chatID int64, sessionID string) {
 	}
 	a.rememberSession(sess)
 	a.setBinding(chatID, sess.ID)
-	a.send(chatID, fmt.Sprintf("🔗 Bound to: %s\n%s", sess.DisplayTitle(), sess.Location.Directory))
+	directory := strings.TrimSpace(sess.Location.Directory)
+	if directory == "" {
+		directory = "default location"
+	}
+	a.send(chatID, fmt.Sprintf("**🔗 Bound to %s**\n📁 `%s`", sess.DisplayTitle(), directory))
+}
+
+func (a *App) showLastMessage(chatID int64) {
+	sessionID := a.binding(chatID)
+	if sessionID == "" {
+		a.send(chatID, "No session bound. Send `/sessions` to pick one.")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if sess, err := a.oc.GetSession(ctx, sessionID); err == nil {
+		a.rememberSession(sess)
+	}
+	msg, ok, err := a.oc.LastAssistantMessage(ctx, sessionID)
+	if err != nil {
+		a.send(chatID, fmt.Sprintf("❌ Could not read the last message: %v", err))
+		return
+	}
+	if !ok {
+		a.send(chatID, "No assistant message found for this session yet.")
+		return
+	}
+
+	text := msg.FinalText()
+	hasThinking := msg.HasReasoning()
+	if strings.TrimSpace(text) == "" && !hasThinking {
+		a.send(chatID, "No assistant message found for this session yet.")
+		return
+	}
+
+	header := fmt.Sprintf("**📨 Last message**\nSession: %s", a.sessionLabel(sessionID))
+	var blocks []string
+	if strings.TrimSpace(text) != "" {
+		blocks = append(blocks, text)
+	}
+	markup := a.notificationMarkup(sessionID, msg.ID, strings.TrimSpace(text) != "", hasThinking)
+	a.sendPartsToChatWithMarkup(chatID, contentMessages(header, blocks), markup)
+}
+
+const newSessionDisabled = "⚠️ **New sessions are disabled.**\n\n" +
+	"Enable **Allow new messages** in the OpenCode Telegram plugin to create sessions from Telegram."
+
+func (a *App) commandNew(chatID int64) {
+	if !a.settings.Get().Security.AllowNewMessages {
+		a.send(chatID, newSessionDisabled)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	done := a.startDelayedLoading(chatID, "⏳ Creating a new session…", 250*time.Millisecond)
+	sess, err := a.oc.CreateSession(ctx, a.newSessionDirectory(ctx, chatID))
+	done()
+	if err != nil {
+		a.send(chatID, fmt.Sprintf("❌ Could not create a session: %v", err))
+		return
+	}
+	if strings.TrimSpace(sess.ID) == "" {
+		a.send(chatID, "❌ OpenCode returned an empty session.")
+		return
+	}
+
+	a.rememberSession(sess)
+	a.setBinding(chatID, sess.ID)
+	a.send(chatID, newSessionText(sess))
+}
+
+// newSessionDirectory keeps /new in the same project as the bound session.
+// Without a binding it falls back to the most recent session, and finally to
+// the OpenCode server's default location.
+func (a *App) newSessionDirectory(ctx context.Context, chatID int64) string {
+	if sessionID := a.binding(chatID); sessionID != "" {
+		if sess, err := a.oc.GetSession(ctx, sessionID); err == nil {
+			a.rememberSession(sess)
+			if directory := strings.TrimSpace(sess.Location.Directory); directory != "" {
+				return directory
+			}
+		}
+	}
+	if sessions, err := a.recentSessions(ctx, 1); err == nil {
+		for _, sess := range sessions {
+			if directory := strings.TrimSpace(sess.Location.Directory); directory != "" {
+				return directory
+			}
+		}
+	}
+	return ""
+}
+
+func newSessionText(sess occlient.Session) string {
+	title := truncateOneLine(sess.DisplayTitle(), 80)
+	if title == "" {
+		title = sess.ID
+	}
+	directory := strings.TrimSpace(sess.Location.Directory)
+	if directory == "" {
+		directory = "default location"
+	}
+	return fmt.Sprintf("**🆕 New session bound**\n\n**%s**\n📁 `%s`\n\nSend a message to start working in this session.", title, directory)
 }
 
 func (a *App) binding(chatID int64) string {
@@ -318,8 +477,13 @@ func (a *App) sessionLabel(sessionID string) string {
 }
 
 func (a *App) commandNotify(chatID int64, args []string) {
+	if len(args) == 0 {
+		enabled := a.settings.Get().Notifications.Enabled
+		a.sendMarkup(chatID, notifyStatusText(enabled, false), a.notifyMarkup(chatID, enabled))
+		return
+	}
 	if len(args) != 1 {
-		a.send(chatID, "Usage: /notify on|off")
+		a.send(chatID, "Usage: `/notify on|off`")
 		return
 	}
 	var enabled bool
@@ -329,7 +493,7 @@ func (a *App) commandNotify(chatID int64, args []string) {
 	case "off", "false", "0", "no":
 		enabled = false
 	default:
-		a.send(chatID, "Usage: /notify on|off")
+		a.send(chatID, "Usage: `/notify on|off`")
 		return
 	}
 	st, err := a.settings.Patch(settings.Patch{
@@ -339,7 +503,58 @@ func (a *App) commandNotify(chatID int64, args []string) {
 		a.send(chatID, fmt.Sprintf("❌ Could not update settings: %v", err))
 		return
 	}
-	a.send(chatID, fmt.Sprintf("Notifications are now %s.", onOff(st.Notifications.Enabled)))
+	a.sendMarkup(chatID, notifyStatusText(st.Notifications.Enabled, true), a.notifyMarkup(chatID, st.Notifications.Enabled))
+}
+
+func (a *App) notifyMarkup(chatID int64, enabled bool) tgbotapi.InlineKeyboardMarkup {
+	onLabel := "Turn on"
+	offLabel := "Turn off"
+	if enabled {
+		onLabel = "✅ " + onLabel
+	} else {
+		offLabel = "✅ " + offLabel
+	}
+	onToken := a.addAction(action{Kind: "notify_toggle", Value: "on", ChatID: chatID})
+	offToken := a.addAction(action{Kind: "notify_toggle", Value: "off", ChatID: chatID})
+	return tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(
+		tgbotapi.NewInlineKeyboardButtonData(onLabel, callbackData(onToken)),
+		tgbotapi.NewInlineKeyboardButtonData(offLabel, callbackData(offToken)),
+	))
+}
+
+func (a *App) setNotifyFromCallback(chatID int64, messageID int, value string) {
+	enabled := strings.EqualFold(value, "on")
+	st, err := a.settings.Patch(settings.Patch{
+		Notifications: &settings.NotificationsPatch{Enabled: &enabled},
+	})
+	if err != nil {
+		a.send(chatID, fmt.Sprintf("❌ Could not update settings: %v", err))
+		return
+	}
+	markup := a.notifyMarkup(chatID, st.Notifications.Enabled)
+	text := notifyStatusText(st.Notifications.Enabled, false)
+	if messageID > 0 {
+		a.editMarkup(chatID, messageID, text, &markup)
+		return
+	}
+	a.sendMarkup(chatID, text, markup)
+}
+
+func notifyStatusText(enabled, changed bool) string {
+	next := "on"
+	action := "enable"
+	if enabled {
+		next = "off"
+		action = "disable"
+	}
+	state := "are"
+	if changed {
+		state = "are now"
+	}
+	return fmt.Sprintf(
+		"**🔔 Notifications %s %s.**\n\nUse the buttons below, or send `/notify %s` to %s them.",
+		state, onOff(enabled), next, action,
+	)
 }
 
 func (a *App) interruptBound(chatID int64) {
@@ -358,27 +573,32 @@ func (a *App) interruptBound(chatID int64) {
 }
 
 func (a *App) showSettings(chatID int64) {
-	st := a.settings.Get().Notifications
-	sec := a.settings.Get().Security
+	current := a.settings.Get()
+	st := current.Notifications
+	sec := current.Security
 	text := strings.Join([]string{
-		"Notification settings",
-		fmt.Sprintf("Enabled: %s", onOff(st.Enabled)),
-		fmt.Sprintf("Session finished: %s", onOff(st.SessionDone)),
-		fmt.Sprintf("Session failed: %s", onOff(st.SessionFailed)),
-		fmt.Sprintf("Session interrupted: %s", onOff(st.SessionInterrupted)),
-		fmt.Sprintf("Question asked: %s", onOff(st.QuestionAsked)),
-		fmt.Sprintf("Permission asked: %s", onOff(st.PermissionAsked)),
-		fmt.Sprintf("Retry status: %s", onOff(st.Retry)),
-		fmt.Sprintf("Include last message: %s", onOff(st.IncludeLastMessage)),
-		fmt.Sprintf("Include directory: %s", onOff(st.IncludeDirectory)),
-		fmt.Sprintf("Long messages: %s", st.LongMessageMode),
-		fmt.Sprintf("Summarize thinking button: %s", onOff(st.ShowSummarizeThinking)),
+		"**⚙️ Settings**",
 		"",
-		"Security (change these from the OpenCode plugin, not Telegram):",
-		fmt.Sprintf("Allow custom question answers: %s", onOff(sec.AllowCustomFormAnswers)),
-		fmt.Sprintf("Allow new messages: %s", onOff(sec.AllowNewMessages)),
+		"**Notifications**",
+		fmt.Sprintf("- Enabled: **%s**", onOff(st.Enabled)),
+		fmt.Sprintf("- Session finished: **%s**", onOff(st.SessionDone)),
+		fmt.Sprintf("- Session failed: **%s**", onOff(st.SessionFailed)),
+		fmt.Sprintf("- Session interrupted: **%s**", onOff(st.SessionInterrupted)),
+		fmt.Sprintf("- Question asked: **%s**", onOff(st.QuestionAsked)),
+		fmt.Sprintf("- Permission asked: **%s**", onOff(st.PermissionAsked)),
+		fmt.Sprintf("- Retry status: **%s**", onOff(st.Retry)),
+		fmt.Sprintf("- Include last message: **%s**", onOff(st.IncludeLastMessage)),
+		fmt.Sprintf("- Include directory: **%s**", onOff(st.IncludeDirectory)),
+		fmt.Sprintf("- Long messages: **%s**", st.LongMessageMode),
+		fmt.Sprintf("- Summarize thinking button: **%s**", onOff(st.ShowSummarizeThinking)),
 		"",
-		"Use /notify on|off to toggle delivery.",
+		"**Security**",
+		"_Change these from the OpenCode plugin, not Telegram._",
+		fmt.Sprintf("- Allow custom question answers: **%s**", onOff(sec.AllowCustomFormAnswers)),
+		fmt.Sprintf("- Allow new messages: **%s**", onOff(sec.AllowNewMessages)),
+		fmt.Sprintf("- Allow model switching: **%s**", onOff(sec.AllowModelSwitching)),
+		"",
+		"Use `/notify` to see delivery status or `/notify on|off` to change it.",
 	}, "\n")
 	a.send(chatID, text)
 }
@@ -429,7 +649,7 @@ func (a *App) handleCallbackFrom(chatID int64, messageID int, data string) {
 	}
 	if act.ChatID != 0 && act.ChatID != chatID {
 		switch act.Kind {
-		case "agent", "model", "daemon_exit", "poweroff", "confirm_cancel":
+		case "agent", "model", "notify_toggle", "daemon_exit", "poweroff", "confirm_cancel":
 			a.send(chatID, "⚠️ This button belongs to another chat.")
 			return
 		}
@@ -447,6 +667,8 @@ func (a *App) handleCallbackFrom(chatID int64, messageID int, data string) {
 	}
 
 	switch act.Kind {
+	case "notify_toggle":
+		a.setNotifyFromCallback(chatID, messageID, act.Value)
 	case "bind":
 		a.bindFromCallback(chatID, act)
 	case "bind_reply":
