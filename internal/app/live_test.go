@@ -78,6 +78,27 @@ func TestUnbindStopsLive(t *testing.T) {
 	}
 }
 
+func TestLiveRendersShellCommandAsCodeBlock(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+	a.setBinding(123, "ses_1")
+
+	a.handleCommand(123, 123, "/live")
+	testLiveDelta(t, a, "session.tool.input.started", `{"sessionID":"ses_1","assistantMessageID":"msg_1","id":"tool_1","name":"shell"}`)
+	testLiveDelta(t, a, "session.shell.started", `{"sessionID":"ses_1","shell":{"id":"sh_1","status":"running","command":"printf 'hello'\necho done","cwd":"/tmp","shell":"/bin/bash","file":"/tmp/script.sh","metadata":{},"time":{"started":1}}}`)
+	testLiveDelta(t, a, "session.tool.success", `{"sessionID":"ses_1","assistantMessageID":"msg_1","id":"tool_1","content":[],"executed":true}`)
+
+	a.handleCommand(123, 123, "/stoplive")
+
+	all := ftg.allText()
+	if !strings.Contains(all, "```sh\nprintf 'hello'\necho done\n```") {
+		t.Fatalf("shell command missing from live output:\n%s", all)
+	}
+	// The shell tool itself must not also be rendered as a bare name.
+	if strings.Contains(all, "🔧 shell\n✅") {
+		t.Fatalf("shell tool rendered without its command:\n%s", all)
+	}
+}
+
 func TestLiveRequiresBinding(t *testing.T) {
 	a, ftg, _ := newIntegrationApp(t)
 

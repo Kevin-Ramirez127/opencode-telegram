@@ -146,6 +146,7 @@ var EventTypes = []string{
 	"session.tool.input.started",
 	"session.tool.success",
 	"session.tool.failed",
+	"session.shell.started",
 	"form.created",
 	"form.replied",
 	"form.cancelled",

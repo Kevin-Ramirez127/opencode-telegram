@@ -341,7 +341,8 @@ is on.
 
 `/live` streams the bound session's assistant output as OpenCode produces it,
 editing a Telegram message in place and starting a new message when the current
-one fills up. While a stream is active, the chat's command menu shows
+one fills up. Shell tool commands are included as fenced code blocks, not just
+the tool name. While a stream is active, the chat's command menu shows
 `/stoplive` in place of `/live`. The stream also stops when the session ends or
 when you run `/stoplive`, `/unbind`, `/bind`, `/stop`, `/interrupt`, `/exit`, or
 `/poweroff`.

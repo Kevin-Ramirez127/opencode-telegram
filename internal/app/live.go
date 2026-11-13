@@ -125,6 +125,35 @@ func (ls *liveSession) appendTool(name string) {
 	ls.text += "🔧 " + name + "\n"
 }
 
+func (ls *liveSession) appendShell(command string) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return
+	}
+	ls.mu.Lock()
+	defer ls.mu.Unlock()
+	ls.separator()
+	ls.text += "🔧 shell\n" + markdownCodeBlock("sh", command) + "\n"
+}
+
+// markdownCodeBlock wraps text in a fence that cannot be closed by the text
+// itself, so commands containing backticks still render correctly.
+func markdownCodeBlock(language, text string) string {
+	fence := "```"
+	for strings.Contains(text, fence) {
+		fence += "`"
+	}
+	return fence + language + "\n" + text + "\n" + fence
+}
+
+func isShellTool(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "shell", "bash", "sh", "zsh", "powershell", "cmd":
+		return true
+	}
+	return false
+}
+
 func (ls *liveSession) appendToolResult(ok bool, message string) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
@@ -150,6 +179,9 @@ func (a *App) handleLiveEvent(ev occlient.Event) {
 		Text               string                   `json:"text"`
 		Name               string                   `json:"name"`
 		Error              occlient.StructuredError `json:"error"`
+		Shell              struct {
+			Command string `json:"command"`
+		} `json:"shell"`
 	}
 	if ev.DecodeData(&data) != nil || data.SessionID == "" {
 		return
@@ -174,8 +206,17 @@ func (a *App) handleLiveEvent(ev occlient.Event) {
 			ls.endBlock(key, data.Text)
 		}
 	case "session.tool.input.started":
+		// Shell commands are rendered by session.shell.started with their
+		// command text; showing the bare tool name here would duplicate it.
+		if isShellTool(data.Name) {
+			return
+		}
 		for _, ls := range lives {
 			ls.appendTool(data.Name)
+		}
+	case "session.shell.started":
+		for _, ls := range lives {
+			ls.appendShell(data.Shell.Command)
 		}
 	case "session.tool.success":
 		for _, ls := range lives {

@@ -158,7 +158,8 @@ func (a *App) handleEvent(ev occlient.Event) {
 		}
 
 	case "session.text.started", "session.text.delta", "session.text.ended",
-		"session.tool.input.started", "session.tool.success", "session.tool.failed":
+		"session.tool.input.started", "session.tool.success", "session.tool.failed",
+		"session.shell.started":
 		a.handleLiveEvent(ev)
 
 	case "session.execution.started":
