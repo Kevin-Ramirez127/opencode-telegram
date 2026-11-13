@@ -127,9 +127,9 @@ func (c *Client) StreamEvents(ctx context.Context, types []string, out chan<- Ev
 	return io.EOF
 }
 
-// EventTypes is the set the daemon needs. It excludes high-volume token
-// deltas while keeping enough state to know when a session finishes and when
-// it is waiting for a human.
+// EventTypes is the set the daemon needs. It includes the streaming deltas
+// used by /live; they are cheap to handle and only buffered while a chat has
+// an active live stream.
 var EventTypes = []string{
 	"session.created",
 	"session.renamed",
@@ -140,6 +140,12 @@ var EventTypes = []string{
 	"session.execution.succeeded",
 	"session.execution.failed",
 	"session.execution.interrupted",
+	"session.text.started",
+	"session.text.delta",
+	"session.text.ended",
+	"session.tool.input.started",
+	"session.tool.success",
+	"session.tool.failed",
 	"form.created",
 	"form.replied",
 	"form.cancelled",

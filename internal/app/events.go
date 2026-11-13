@@ -153,8 +153,13 @@ func (a *App) handleEvent(ev occlient.Event) {
 			if id == "" {
 				id = data.ID
 			}
+			a.stopLiveForSession(id)
 			a.forgetSession(id)
 		}
+
+	case "session.text.started", "session.text.delta", "session.text.ended",
+		"session.tool.input.started", "session.tool.success", "session.tool.failed":
+		a.handleLiveEvent(ev)
 
 	case "session.execution.started":
 		id := sessionIDFrom(ev)
@@ -165,6 +170,7 @@ func (a *App) handleEvent(ev occlient.Event) {
 	case "session.execution.succeeded":
 		id := sessionIDFrom(ev)
 		if id != "" {
+			a.stopLiveForSession(id)
 			a.notifySession(id, "succeeded", "")
 		}
 
@@ -175,6 +181,7 @@ func (a *App) handleEvent(ev occlient.Event) {
 		}
 		_ = ev.DecodeData(&data)
 		if data.SessionID != "" {
+			a.stopLiveForSession(data.SessionID)
 			msg := data.Error.Message
 			if msg == "" {
 				msg = data.Error.Type
@@ -189,6 +196,7 @@ func (a *App) handleEvent(ev occlient.Event) {
 		}
 		_ = ev.DecodeData(&data)
 		if data.SessionID != "" {
+			a.stopLiveForSession(data.SessionID)
 			a.notifySession(data.SessionID, "interrupted", data.Reason)
 		}
 
@@ -215,6 +223,11 @@ func (a *App) handleEvent(ev occlient.Event) {
 
 	case "session.idle":
 		if id := sessionIDFrom(ev); id != "" {
+			// A question or permission request also leaves the session idle;
+			// keep streaming because the run resumes after the answer.
+			if !a.hasPendingHumanInput(id) {
+				a.stopLiveForSession(id)
+			}
 			a.notifySession(id, "idle", "")
 		}
 

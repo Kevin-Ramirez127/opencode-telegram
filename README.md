@@ -303,6 +303,8 @@ Change them from the plugin (which asks for confirmation) or by editing
 | `/effort` | Show and choose the current model's effort level, with the active one checked (requires `allow_model_switching`) |
 | `/usage` | Show OpenCode Go and Console usage limits |
 | `/lastmessage` | Show the bound session's last assistant message, with summarize, thinking, and reply buttons |
+| `/live` | Stream the bound session's output to this chat in real time |
+| `/stoplive` | Stop the live output stream |
 | `/interrupt` | Interrupt the bound session's current run |
 | `/notify` | Show notification status with tappable Turn on / Turn off buttons |
 | `/notify on\|off` | Toggle notification delivery |
@@ -336,6 +338,13 @@ is read-only and always available once a session is bound. The message reuses
 the notification actions: **Summarize output**, **Show thinking** when the
 message has reasoning, and **Reply to this session** when `allow_new_messages`
 is on.
+
+`/live` streams the bound session's assistant output as OpenCode produces it,
+editing a Telegram message in place and starting a new message when the current
+one fills up. While a stream is active, the chat's command menu shows
+`/stoplive` in place of `/live`. The stream also stops when the session ends or
+when you run `/stoplive`, `/unbind`, `/bind`, `/stop`, `/interrupt`, `/exit`, or
+`/poweroff`.
 
 `/notify` without an argument shows the current delivery state and two buttons,
 **Turn on** and **Turn off**, with a check mark on the active state.
