@@ -27,6 +27,7 @@ var botCommands = []tgbotapi.BotCommand{
 	{Command: "effort", Description: "Choose the bound model's effort level"},
 	{Command: "usage", Description: "Show OpenCode Go and Console usage limits"},
 	{Command: "lastmessage", Description: "Show the bound session's last assistant message"},
+	{Command: "live", Description: "Stream the bound session's output live"},
 	{Command: "interrupt", Description: "Stop the bound session's current run"},
 	{Command: "notify", Description: "Show or change notification delivery"},
 	{Command: "settings", Description: "Show notification and security settings"},

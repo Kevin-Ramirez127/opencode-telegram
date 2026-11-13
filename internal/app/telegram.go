@@ -164,7 +164,12 @@ func (a *App) handleCommand(chatID, userID int64, text string) {
 		a.bindSession(chatID, args[0])
 	case "/new":
 		a.commandNew(chatID)
+	case "/live":
+		a.commandLive(chatID)
+	case "/stoplive":
+		a.commandStopLive(chatID)
 	case "/unbind":
+		a.stopLive(chatID)
 		a.setBinding(chatID, "")
 		a.send(chatID, "🔓 Unbound. Session notifications are unaffected.")
 	case "/agents", "/agent":
@@ -189,6 +194,7 @@ func (a *App) handleCommand(chatID, userID int64, text string) {
 	case "/notify":
 		a.commandNotify(chatID, args)
 	case "/interrupt", "/stop":
+		a.stopLive(chatID)
 		a.interruptBound(chatID)
 	case "/id":
 		a.send(chatID, fmt.Sprintf("Telegram user id: %d\nChat id: %d", userID, chatID))
@@ -197,8 +203,10 @@ func (a *App) handleCommand(chatID, userID int64, text string) {
 	case "/settings":
 		a.showSettings(chatID)
 	case "/exit":
+		a.stopAllLive()
 		a.commandExit(chatID)
 	case "/poweroff":
+		a.stopAllLive()
 		a.commandPowerOff(chatID)
 	default:
 		a.send(chatID, fmt.Sprintf("Unknown command %q. Send /help for the command list.", cmd))
@@ -255,6 +263,8 @@ func (a *App) helpText() string {
 		"- `/effort` — choose the bound model's effort level",
 		"- `/usage` — show OpenCode Go and Console usage limits",
 		"- `/lastmessage` — show the bound session's last assistant message",
+		"- `/live` — stream the bound session's output in real time",
+		"- `/stoplive` — stop the live output stream",
 		"- `/interrupt` — stop the bound session's current run",
 		"- `/notify` — show or change notification delivery",
 		"- `/settings` — show notification and security settings",
@@ -426,6 +436,7 @@ func (a *App) bindSession(chatID int64, sessionID string) {
 		a.send(chatID, fmt.Sprintf("❌ Session %s not found: %v", sessionID, err))
 		return
 	}
+	a.stopLive(chatID)
 	a.rememberSession(sess)
 	a.setBinding(chatID, sess.ID)
 	directory := strings.TrimSpace(sess.Location.Directory)
@@ -501,6 +512,7 @@ func (a *App) commandNew(chatID int64) {
 		return
 	}
 
+	a.stopLive(chatID)
 	a.rememberSession(sess)
 	a.setBinding(chatID, sess.ID)
 	a.send(chatID, newSessionText(sess))
@@ -931,6 +943,7 @@ func (a *App) handleCallbackFrom(chatID int64, messageID int, data string) {
 	case "bind":
 		a.bindFromCallback(chatID, act)
 	case "bind_reply":
+		a.stopLive(chatID)
 		a.setBinding(chatID, act.SessionID)
 		a.send(chatID, fmt.Sprintf("🔗 Bound to %s.\nType your message now.", a.sessionLabel(act.SessionID)))
 	case "agent":
@@ -946,6 +959,7 @@ func (a *App) handleCallbackFrom(chatID int64, messageID int, data string) {
 	case "summarize_output":
 		a.summarizeOutput(chatID, act)
 	case "unbind":
+		a.stopLive(chatID)
 		a.setBinding(chatID, "")
 		a.send(chatID, "🔓 Unbound.")
 	case "perm":
@@ -977,6 +991,7 @@ func (a *App) handleCallbackFrom(chatID int64, messageID int, data string) {
 }
 
 func (a *App) bindFromCallback(chatID int64, act action) {
+	a.stopLive(chatID)
 	a.setBinding(chatID, act.SessionID)
 	a.send(chatID, fmt.Sprintf("🔗 Bound to: %s", a.sessionLabel(act.SessionID)))
 }

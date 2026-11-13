@@ -51,6 +51,7 @@ type App struct {
 
 	mu           sync.Mutex
 	formMu       sync.Mutex
+	liveMenuMu   sync.Mutex
 	sessions     map[string]*sessionState
 	bindings     map[int64]string
 	actions      map[string]*action
@@ -58,6 +59,7 @@ type App struct {
 	pendingInput map[int64]*pendingInput
 	notified     map[string]time.Time
 	permMsgs     map[string][]sentMessage
+	live         map[int64]*liveSession
 
 	allowlistStat os.FileInfo
 	settingsStat  os.FileInfo
@@ -93,6 +95,7 @@ func New(cfg *config.Config, bot *tgbotapi.BotAPI, oc *occlient.Client, wl *whit
 		pendingInput:     make(map[int64]*pendingInput),
 		notified:         make(map[string]time.Time),
 		permMsgs:         make(map[string][]sentMessage),
+		live:             make(map[int64]*liveSession),
 	}
 }
 
