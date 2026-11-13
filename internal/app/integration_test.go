@@ -606,7 +606,9 @@ func TestEffortCommandShowsCurrentAndSwitches(t *testing.T) {
 	all := ftg.allText()
 	for _, want := range []string{
 		"**🎚 Effort level**",
-		"Current effort: `medium`",
+		"- **Session:** Build the thing",
+		"- **Model:** **DeepSeek V4 Flash (opencode-go)** (`opencode-go/deepseek-v4-flash`)",
+		"- **Current effort:** `medium`",
 	} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("effort message missing %q:\n%s", want, all)

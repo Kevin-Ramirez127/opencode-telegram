@@ -334,12 +334,12 @@ func (a *App) showEffort(chatID int64) {
 	current := sess.Model.Variant
 	var b strings.Builder
 	b.WriteString("**🎚 Effort level**\n\n")
-	fmt.Fprintf(&b, "Session: %s\n", sess.DisplayTitle())
-	fmt.Fprintf(&b, "Model: **%s** (`%s`)\n", modelLabel(model), modelKey(model))
+	fmt.Fprintf(&b, "- **Session:** %s\n", sess.DisplayTitle())
+	fmt.Fprintf(&b, "- **Model:** **%s** (`%s`)\n", modelLabel(model), modelKey(model))
 	if current == "" {
-		b.WriteString("Current effort: **model default**")
+		b.WriteString("- **Current effort:** model default")
 	} else {
-		fmt.Fprintf(&b, "Current effort: `%s`", current)
+		fmt.Fprintf(&b, "- **Current effort:** `%s`", current)
 	}
 	b.WriteString("\n\nTap an effort level to use it for subsequent turns.")
 
