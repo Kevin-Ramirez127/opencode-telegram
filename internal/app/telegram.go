@@ -2,8 +2,11 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -15,7 +18,17 @@ import (
 	"opencode-telegram/internal/settings"
 )
 
-const maxTelegramText = 4096
+const (
+	maxTelegramText  = 4096
+	maxTelegramImage = 10 << 20
+)
+
+// telegramImage describes one image attached to a Telegram message.
+type telegramImage struct {
+	FileID string
+	Name   string
+	MIME   string
+}
 
 type sentMessage struct {
 	ChatID    int64
@@ -59,12 +72,17 @@ func (a *App) telegramLoop(ctx context.Context) {
 func (a *App) handleUpdate(upd tgbotapi.Update) {
 	var userID, chatID int64
 	var text string
+	var image telegramImage
 	var isCallback bool
 
 	switch {
 	case upd.Message != nil && upd.Message.From != nil:
 		userID, chatID = upd.Message.From.ID, upd.Message.Chat.ID
 		text = upd.Message.Text
+		if text == "" {
+			text = upd.Message.Caption
+		}
+		image, _ = imageFromMessage(upd.Message)
 	case upd.CallbackQuery != nil:
 		q := upd.CallbackQuery
 		userID = q.From.ID
@@ -97,12 +115,18 @@ func (a *App) handleUpdate(upd tgbotapi.Update) {
 	}
 
 	text = strings.TrimSpace(text)
-	if text == "" {
+	if isCallback {
+		if text == "" {
+			return
+		}
+		a.handleCallbackFrom(chatID, upd.CallbackQuery.Message.MessageID, text)
 		return
 	}
-
-	if isCallback {
-		a.handleCallbackFrom(chatID, upd.CallbackQuery.Message.MessageID, text)
+	if image.FileID != "" {
+		a.handleImage(chatID, text, image)
+		return
+	}
+	if text == "" {
 		return
 	}
 	if strings.HasPrefix(text, "/") {
@@ -124,6 +148,8 @@ func (a *App) handleCommand(chatID, userID int64, text string) {
 		a.send(chatID, a.helpText())
 	case "/status", "/where":
 		a.showStatus(chatID)
+	case "/branch":
+		a.showBranch(chatID)
 	case "/sessions", "/session":
 		if cmd == "/session" && len(args) > 0 {
 			a.bindSession(chatID, args[0])
@@ -154,6 +180,8 @@ func (a *App) handleCommand(chatID, userID int64, text string) {
 		a.showAgents(chatID)
 	case "/models", "/model":
 		a.showModels(chatID)
+	case "/effort":
+		a.showEffort(chatID)
 	case "/usage":
 		a.showUsage(chatID)
 	case "/lastmessage":
@@ -190,6 +218,8 @@ func (a *App) startText() string {
 		"",
 		"> Sending messages and creating sessions require **Allow new messages** in the OpenCode Telegram plugin.",
 		"",
+		fmt.Sprintf("**Bot version:** `%s`", a.version),
+		"",
 		"Send `/help` for the full command list.",
 	}, "\n")
 }
@@ -208,8 +238,10 @@ func (a *App) helpText() string {
 		"> Sending messages requires **Allow new messages** in the OpenCode Telegram plugin.",
 		"",
 		"**Commands**",
-		"- `/start`, `/help` — show this guide",
+		"- `/start` — welcome guide and quick start",
+		"- `/help` — show this command list",
 		"- `/status` — daemon and OpenCode status",
+		"- `/branch` — show the bound session's current git branch",
 		"- `/sessions` — list sessions with bind buttons",
 		"- `/bind <session-id>` — bind this chat to a session",
 		"- `/unbind` — remove the binding",
@@ -220,6 +252,7 @@ func (a *App) helpText() string {
 	lines = append(lines,
 		"- `/agents [agent-id]` — list or switch the bound session's agent",
 		"- `/models` — list all available chat models",
+		"- `/effort` — choose the bound model's effort level",
 		"- `/usage` — show OpenCode Go and Console usage limits",
 		"- `/lastmessage` — show the bound session's last assistant message",
 		"- `/interrupt` — stop the bound session's current run",
@@ -247,26 +280,76 @@ func (a *App) showStatus(chatID int64) {
 	bound := a.binding(chatID)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s OpenCode %s\n", icon, state)
-	fmt.Fprintf(&b, "Endpoint: %s\n", snap.OpenCodeURL)
-	if snap.OpenCodeVer != "" {
-		fmt.Fprintf(&b, "Server version: %s\n", snap.OpenCodeVer)
+	b.WriteString("**📊 Status**\n\n")
+	fmt.Fprintf(&b, "%s **OpenCode %s**\n", icon, state)
+	endpoint := snap.OpenCodeURL
+	if strings.TrimSpace(endpoint) == "" {
+		endpoint = "not configured"
 	}
-	fmt.Fprintf(&b, "Daemon uptime: %s\n", time.Duration(snap.UptimeSec)*time.Second)
-	fmt.Fprintf(&b, "Allowlist: %d users, %d chats\n", snap.Users, snap.Chats)
-	fmt.Fprintf(&b, "Active sessions: %d\n", snap.Active)
-	fmt.Fprintf(&b, "Pending questions: %d\n", snap.PendingForm)
-	fmt.Fprintf(&b, "Pending permissions: %d\n", snap.PendingPerm)
-	fmt.Fprintf(&b, "Notifications: %s\n", onOff(st.Notifications.Enabled))
+	fmt.Fprintf(&b, "- **Endpoint:** `%s`\n", endpoint)
+	if snap.OpenCodeVer != "" {
+		fmt.Fprintf(&b, "- **Server version:** %s\n", snap.OpenCodeVer)
+	}
+	fmt.Fprintf(&b, "- **Daemon version:** `%s`\n", a.version)
+	fmt.Fprintf(&b, "- **Daemon uptime:** %s\n", time.Duration(snap.UptimeSec)*time.Second)
+	fmt.Fprintf(&b, "- **Allowlist:** %d users, %d chats\n", snap.Users, snap.Chats)
+	fmt.Fprintf(&b, "- **Active sessions:** %d\n", snap.Active)
+	fmt.Fprintf(&b, "- **Pending questions:** %d\n", snap.PendingForm)
+	fmt.Fprintf(&b, "- **Pending permissions:** %d\n", snap.PendingPerm)
+	fmt.Fprintf(&b, "- **Notifications:** %s\n", onOff(st.Notifications.Enabled))
 	if bound == "" {
-		b.WriteString("Bound session: none\n")
+		b.WriteString("- **Bound session:** none\n")
 	} else {
-		fmt.Fprintf(&b, "Bound session: %s\n", a.sessionLabel(bound))
+		fmt.Fprintf(&b, "- **Bound session:** %s\n", a.sessionLabel(bound))
 	}
 	if snap.LastError != "" {
-		fmt.Fprintf(&b, "Last error: %s\n", snap.LastError)
+		fmt.Fprintf(&b, "- **Last error:** %s\n", snap.LastError)
 	}
 	a.send(chatID, b.String())
+}
+
+func (a *App) showBranch(chatID int64) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	directory := ""
+	sessionLabel := ""
+	if sessionID := a.binding(chatID); sessionID != "" {
+		if sess, err := a.oc.GetSession(ctx, sessionID); err == nil {
+			a.rememberSession(sess)
+			directory = strings.TrimSpace(sess.Location.Directory)
+			sessionLabel = sess.DisplayTitle()
+		}
+	}
+
+	info, err := a.oc.VCSInfo(ctx, directory)
+	if err != nil {
+		a.send(chatID, fmt.Sprintf("❌ Could not read the git branch: %v", err))
+		return
+	}
+
+	if directory == "" {
+		directory = "default location"
+	}
+	var b strings.Builder
+	b.WriteString("**🌿 Git branch**\n\n")
+	if sessionLabel != "" {
+		fmt.Fprintf(&b, "- **Session:** %s\n", sessionLabel)
+	}
+	fmt.Fprintf(&b, "- **Directory:** `%s`\n", directory)
+	current := strings.TrimSpace(info.Branch.Current)
+	if current == "" {
+		b.WriteString("- **Repository:** not a git repository")
+	} else {
+		fmt.Fprintf(&b, "- **Current branch:** `%s`\n", current)
+		if def := strings.TrimSpace(info.Branch.Default); def != "" && def != current {
+			fmt.Fprintf(&b, "- **Default branch:** `%s`\n", def)
+		}
+		if provider := strings.TrimSpace(info.Provider); provider != "" {
+			fmt.Fprintf(&b, "- **Provider:** `%s`\n", provider)
+		}
+	}
+	a.send(chatID, strings.TrimSpace(b.String()))
 }
 
 func (a *App) showSessions(chatID int64) {
@@ -401,8 +484,13 @@ func (a *App) commandNew(chatID int64) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	directory := a.newSessionDirectory(ctx, chatID)
+	var model *occlient.ModelRef
+	if last, ok := a.lastUsedModel(ctx, directory); ok {
+		model = &last
+	}
 	done := a.startDelayedLoading(chatID, "⏳ Creating a new session…", 250*time.Millisecond)
-	sess, err := a.oc.CreateSession(ctx, a.newSessionDirectory(ctx, chatID))
+	sess, err := a.oc.CreateSessionWithModel(ctx, directory, model)
 	done()
 	if err != nil {
 		a.send(chatID, fmt.Sprintf("❌ Could not create a session: %v", err))
@@ -621,11 +709,182 @@ func (a *App) handleFreeText(chatID int64, text string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	if sess, err := a.oc.GetSession(ctx, sessionID); err == nil {
+		a.rememberSession(sess)
+		a.ensureSessionModel(ctx, sess)
+	}
 	if err := a.oc.Prompt(ctx, sessionID, text); err != nil {
 		a.send(chatID, fmt.Sprintf("❌ Could not send message to %s: %v", a.sessionLabel(sessionID), err))
 		return
 	}
 	a.send(chatID, fmt.Sprintf("📨 Sent to %s.", a.sessionLabel(sessionID)))
+}
+
+func (a *App) handleImage(chatID int64, caption string, image telegramImage) {
+	if a.hasPendingFormInput(chatID) {
+		if strings.TrimSpace(caption) != "" {
+			a.handleFormText(chatID, caption)
+			return
+		}
+		a.send(chatID, "A question is waiting for a text answer. Send text or use its buttons.")
+		return
+	}
+
+	st := a.settings.Get()
+	if !st.Security.AllowNewMessages {
+		a.send(chatID, "Image messages are disabled. Enable \"Allow new messages\" in the OpenCode Telegram plugin if you want to send images to OpenCode.")
+		return
+	}
+	sessionID := a.binding(chatID)
+	if sessionID == "" {
+		a.send(chatID, "No session bound. Send /sessions to pick one.")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	done := a.startDelayedLoading(chatID, "⏳ Uploading image…", 250*time.Millisecond)
+	data, err := a.downloadTelegramFile(ctx, image.FileID)
+	done()
+	if err != nil {
+		a.send(chatID, fmt.Sprintf("❌ Could not download the image: %v", err))
+		return
+	}
+	if len(data) == 0 {
+		a.send(chatID, "❌ Telegram returned an empty image.")
+		return
+	}
+
+	mimeType := strings.TrimSpace(image.MIME)
+	if !isImageMIME(mimeType) {
+		mimeType = http.DetectContentType(data)
+	}
+	if !isImageMIME(mimeType) {
+		a.send(chatID, "❌ That attachment is not an image.")
+		return
+	}
+	name := strings.TrimSpace(image.Name)
+	if name == "" {
+		name = defaultImageName(mimeType)
+	}
+	text := strings.TrimSpace(caption)
+	if text == "" {
+		text = "Please look at the attached image."
+	}
+	if sess, err := a.oc.GetSession(ctx, sessionID); err == nil {
+		a.rememberSession(sess)
+		a.ensureSessionModel(ctx, sess)
+	}
+	attachment := occlient.FileAttachment{
+		URI:    "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data),
+		Source: occlient.FileSource{Type: "inline"},
+		Name:   name,
+	}
+	if err := a.oc.Prompt(ctx, sessionID, text, attachment); err != nil {
+		a.send(chatID, fmt.Sprintf("❌ Could not send the image to %s: %v", a.sessionLabel(sessionID), err))
+		return
+	}
+	a.send(chatID, fmt.Sprintf("🖼 Sent image to %s.", a.sessionLabel(sessionID)))
+}
+
+func imageFromMessage(msg *tgbotapi.Message) (telegramImage, bool) {
+	if len(msg.Photo) > 0 {
+		best := msg.Photo[0]
+		for _, photo := range msg.Photo[1:] {
+			if photo.Width*photo.Height >= best.Width*best.Height {
+				best = photo
+			}
+		}
+		if best.FileID != "" {
+			return telegramImage{FileID: best.FileID, Name: "photo.jpg", MIME: "image/jpeg"}, true
+		}
+	}
+	if msg.Document != nil && msg.Document.FileID != "" {
+		if isImageMIME(msg.Document.MimeType) || isImageFilename(msg.Document.FileName) {
+			return telegramImage{
+				FileID: msg.Document.FileID,
+				Name:   msg.Document.FileName,
+				MIME:   msg.Document.MimeType,
+			}, true
+		}
+	}
+	return telegramImage{}, false
+}
+
+func isImageMIME(mimeType string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(mimeType)), "image/")
+}
+
+func isImageFilename(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if i := strings.LastIndexByte(name, '.'); i >= 0 {
+		name = name[i:]
+	}
+	switch name {
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif", ".avif":
+		return true
+	}
+	return false
+}
+
+func defaultImageName(mimeType string) string {
+	switch strings.ToLower(strings.TrimSpace(strings.Split(mimeType, ";")[0])) {
+	case "image/png":
+		return "telegram-image.png"
+	case "image/gif":
+		return "telegram-image.gif"
+	case "image/webp":
+		return "telegram-image.webp"
+	case "image/bmp":
+		return "telegram-image.bmp"
+	case "image/tiff":
+		return "telegram-image.tiff"
+	default:
+		return "telegram-image.jpg"
+	}
+}
+
+func (a *App) downloadTelegramFile(ctx context.Context, fileID string) ([]byte, error) {
+	file, err := a.bot.GetFile(tgbotapi.FileConfig{FileID: fileID})
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(file.FilePath) == "" {
+		return nil, fmt.Errorf("Telegram did not return a file path")
+	}
+	if file.FileSize > maxTelegramImage {
+		return nil, fmt.Errorf("image is larger than %d MB", maxTelegramImage>>20)
+	}
+
+	base := strings.TrimRight(a.telegramFileBase, "/")
+	if base == "" {
+		base = "https://api.telegram.org/file/bot"
+	}
+	url := base + "/" + a.bot.Token + "/" + strings.TrimLeft(file.FilePath, "/")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	client := a.bot.Client
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("Telegram file download returned %s", resp.Status)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxTelegramImage+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxTelegramImage {
+		return nil, fmt.Errorf("image is larger than %d MB", maxTelegramImage>>20)
+	}
+	return data, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -649,7 +908,7 @@ func (a *App) handleCallbackFrom(chatID int64, messageID int, data string) {
 	}
 	if act.ChatID != 0 && act.ChatID != chatID {
 		switch act.Kind {
-		case "agent", "model", "notify_toggle", "daemon_exit", "poweroff", "confirm_cancel":
+		case "agent", "model", "effort", "notify_toggle", "daemon_exit", "poweroff", "confirm_cancel":
 			a.send(chatID, "⚠️ This button belongs to another chat.")
 			return
 		}
@@ -678,6 +937,8 @@ func (a *App) handleCallbackFrom(chatID int64, messageID int, data string) {
 		a.switchAgent(chatID, messageID, act.SessionID, act.Value)
 	case "model":
 		a.switchModel(chatID, messageID, act.SessionID, act.Decision, act.Value)
+	case "effort":
+		a.switchEffort(chatID, messageID, act)
 	case "show_thinking":
 		a.showThinking(chatID, act)
 	case "summarize_thinking":

@@ -277,7 +277,7 @@ is single-use so repeated taps cannot start multiple generations.
 |---|---|---|
 | `allow_custom_form_answers` | `false` | Adds **“Type your own response”** to questions. Without it, only the options offered by the form (or answering inside OpenCode) are possible. |
 | `allow_new_messages` | `false` | Lets free-text Telegram messages become prompts for the chat's bound session, and enables `/new`. |
-| `allow_model_switching` | `false` | Lets `/models` change the model used by the bound session. Without it, `/models` explains that the configuration does not allow choosing models. |
+| `allow_model_switching` | `false` | Lets `/models` change the model and `/effort` change its effort level for the bound session. Without it, both commands explain that the configuration does not allow choosing models. |
 
 They are intentionally **not** exposed as Telegram commands: a compromised
 Telegram session must not be able to grant itself prompt-injection rights.
@@ -290,15 +290,17 @@ Change them from the plugin (which asks for confirmation) or by editing
 
 | Command | Meaning |
 |---|---|
-| `/start` | Markdown introduction and quick-start guide |
+| `/start` | Markdown welcome guide, quick start, and bot version |
 | `/help` | Markdown command list and security notes |
-| `/status` | Daemon, OpenCode, allowlist, and pending-work status |
+| `/status` | Markdown daemon, OpenCode, allowlist, and pending-work status |
+| `/branch` | Show the bound session's current git branch |
 | `/sessions` | One message per recent session with its path and a bind button |
 | `/bind <session-id>` | Bind this chat to a session |
 | `/new` | Create a new session and bind it (requires `allow_new_messages`) |
 | `/unbind` | Remove the binding |
 | `/agents [agent-id]` | List or switch the bound session's agent |
-| `/models` | List every available chat model with a switch button for each (requires `allow_model_switching`) |
+| `/models` | Show the current model, then list every available chat model with a switch button for each (requires `allow_model_switching`) |
+| `/effort` | Show and choose the current model's effort level, with the active one checked (requires `allow_model_switching`) |
 | `/usage` | Show OpenCode Go and Console usage limits |
 | `/lastmessage` | Show the bound session's last assistant message, with summarize, thinking, and reply buttons |
 | `/interrupt` | Interrupt the bound session's current run |
@@ -316,13 +318,14 @@ are available only to allowlisted users/chats, and neither runs until the
 confirmation button is pressed. Cancel buttons dismiss the request.
 
 `/agents` lists the primary agents for the bound session and lets you switch
-with a button (or pass an agent id directly). `/models` lists every enabled
-chat model with one switch button per model, marking the model currently
-selected for the bound session; it requires `allow_model_switching`, otherwise
-it replies that the configuration does not allow choosing models. Both commands
-show a temporary loading message if the OpenCode API takes longer than 250 ms.
-Finished-session notifications include an `Agent:` line showing the agent that
-handled the run.
+with a button (or pass an agent id directly). `/models` shows the model
+currently selected for the bound session before listing every enabled chat
+model with one switch button per model; it requires `allow_model_switching`,
+otherwise it replies that the configuration does not allow choosing models.
+`/effort` lists the current model's reasoning-effort variants and marks the
+active one with a check. Both commands show a temporary loading message if the
+OpenCode API takes longer than 250 ms. Finished-session notifications include
+an `Agent:` line showing the agent that handled the run.
 
 `/usage` reads the OpenCode Console usage-limits API and renders the workspace,
 rolling/weekly/monthly OpenCode Go percentages, reset times, and any Console
@@ -339,9 +342,11 @@ is on.
 
 `/new` creates a session in the bound session's project and binds this chat to
 it. Without a binding it uses the most recent session's directory, then the
-OpenCode server default. Like free-text prompts, `/new` requires
-`allow_new_messages`; while that switch is off the command is rejected and
-omitted from `/help` and the bot menu.
+OpenCode server default. New sessions inherit the last model used in that
+project (or the most recently used model overall), and prompts sent to a session
+without an explicit model apply the same default. Like free-text prompts,
+`/new` requires `allow_new_messages`; while that switch is off the command is
+rejected and omitted from `/help` and the bot menu.
 
 The daemon also adds its commands to the bot menu if they are missing. Existing
 bot commands are preserved, so commands registered with BotFather are not
@@ -349,6 +354,8 @@ overwritten.
 
 After `/sessions` + bind (or `/new`), free text is sent to that session **only
 when** `allow_new_messages` is on. Otherwise the bot replies with a reminder.
+Photos and image documents are downloaded from Telegram and attached to the same
+session as inline images, using the caption as the prompt when one is present.
 
 ### Question flow
 

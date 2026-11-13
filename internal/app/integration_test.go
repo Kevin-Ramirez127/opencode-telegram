@@ -31,11 +31,22 @@ type fakeTelegram struct {
 	nextID     int
 	commands   []tgbotapi.BotCommand
 	registered []tgbotapi.BotCommand
+	fileData   []byte
 }
 
 func (f *fakeTelegram) handler(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/file/bot") {
+		f.mu.Lock()
+		data := append([]byte(nil), f.fileData...)
+		f.mu.Unlock()
+		_, _ = w.Write(data)
+		return
+	}
 	method := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
 	switch method {
+	case "getFile":
+		_, _ = io.WriteString(w, `{"ok":true,"result":{"file_id":"file_1","file_size":8,"file_path":"photos/file_1.jpg"}}`)
+		return
 	case "getMe":
 		_, _ = io.WriteString(w, `{"ok":true,"result":{"id":1,"is_bot":true,"first_name":"Test","username":"test_bot"}}`)
 		return
@@ -154,6 +165,8 @@ type fakeOpenCode struct {
 	models        []occlient.ModelInfo
 	usage         *occlient.UsageLimits
 	usageErr      bool
+	vcs           occlient.VCSInfo
+	vcsDir        string
 	switchedAgent string
 	switchedModel occlient.ModelRef
 	lastAssistant string
@@ -162,8 +175,10 @@ type fakeOpenCode struct {
 	generated     string
 	summaryPrompt string
 	prompt        string
+	promptFiles   []occlient.FileAttachment
 	sessions      []occlient.Session
 	createdDir    string
+	createdModel  *occlient.ModelRef
 }
 
 func (f *fakeOpenCode) message() map[string]any {
@@ -214,6 +229,7 @@ func (f *fakeOpenCode) handler(w http.ResponseWriter, r *http.Request) {
 			Location struct {
 				Directory string `json:"directory"`
 			} `json:"location"`
+			Model *occlient.ModelRef `json:"model"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		sess := occlient.Session{
@@ -221,8 +237,12 @@ func (f *fakeOpenCode) handler(w http.ResponseWriter, r *http.Request) {
 			Title:    "Fresh session",
 			Location: occlient.Location{Directory: body.Location.Directory},
 		}
+		if body.Model != nil {
+			sess.Model = *body.Model
+		}
 		f.mu.Lock()
 		f.createdDir = body.Location.Directory
+		f.createdModel = body.Model
 		f.sessions = append([]occlient.Session{sess}, f.sessions...)
 		f.mu.Unlock()
 		writeFakeJSON(w, map[string]any{"data": sess})
@@ -236,6 +256,15 @@ func (f *fakeOpenCode) handler(w http.ResponseWriter, r *http.Request) {
 		models := append([]occlient.ModelInfo(nil), f.models...)
 		f.mu.Unlock()
 		writeFakeJSON(w, map[string]any{"data": models})
+	case r.Method == http.MethodGet && r.URL.Path == "/api/vcs":
+		f.mu.Lock()
+		info := f.vcs
+		f.vcsDir = r.URL.Query().Get("location[directory]")
+		f.mu.Unlock()
+		writeFakeJSON(w, map[string]any{
+			"location": map[string]any{"directory": f.vcsDir},
+			"data":     info,
+		})
 	case r.Method == http.MethodGet && r.URL.Path == "/api/experimental/usage/limits":
 		f.mu.Lock()
 		usage := f.usage
@@ -283,11 +312,13 @@ func (f *fakeOpenCode) handler(w http.ResponseWriter, r *http.Request) {
 		writeFakeJSON(w, map[string]any{"data": map[string]any{"text": text}})
 	case r.Method == http.MethodPost && r.URL.Path == "/api/session/ses_1/prompt":
 		var body struct {
-			Text string `json:"text"`
+			Text  string                    `json:"text"`
+			Files []occlient.FileAttachment `json:"files"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		f.mu.Lock()
 		f.prompt = body.Text
+		f.promptFiles = append([]occlient.FileAttachment(nil), body.Files...)
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/session/ses_1/form/"):
@@ -349,7 +380,11 @@ func newIntegrationApp(t *testing.T) (*App, *fakeTelegram, *fakeOpenCode) {
 			{ID: "hidden", Name: "Hidden", Mode: "primary", Hidden: true},
 		},
 		models: []occlient.ModelInfo{
-			{ID: "deepseek-v4-flash", ModelID: "deepseek-v4-flash", ProviderID: "opencode-go", Name: "DeepSeek V4 Flash", Status: "active", Enabled: true, Type: "chat"},
+			{
+				ID: "deepseek-v4-flash", ModelID: "deepseek-v4-flash", ProviderID: "opencode-go", Name: "DeepSeek V4 Flash",
+				Status: "active", Enabled: true, Type: "chat",
+				Variants: []occlient.ModelVariant{{ID: "low"}, {ID: "medium"}, {ID: "high"}},
+			},
 			{ID: "gpt-6", ModelID: "gpt-6", ProviderID: "opencode", Name: "GPT-6", Status: "active", Enabled: true, Type: "chat"},
 			{ID: "old-model", ModelID: "old-model", ProviderID: "opencode", Name: "Old Model", Status: "deprecated", Enabled: false, Type: "chat"},
 		},
@@ -402,6 +437,7 @@ func newIntegrationApp(t *testing.T) (*App, *fakeTelegram, *fakeOpenCode) {
 		OpenCodePasswordExplicit: true,
 	}
 	a := New(cfg, bot, occlient.New(ocSrv.URL, "", 5*time.Second), wl, st, "test")
+	a.telegramFileBase = tgSrv.URL + "/file/bot"
 	return a, ftg, foc
 }
 
@@ -510,8 +546,8 @@ func TestModelsCommandListsAvailableModels(t *testing.T) {
 
 	all := ftg.allText()
 	for _, want := range []string{
-		"Available models (2)",
-		"Current: `opencode-go/deepseek-v4-flash`",
+		"**🧠 Available models (2)**",
+		"Current model: **DeepSeek V4 Flash (opencode-go)** (`opencode-go/deepseek-v4-flash`)",
 	} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("models message missing %q:\n%s", want, all)
@@ -557,6 +593,107 @@ func TestModelsCommandRequiresBoundSession(t *testing.T) {
 	}
 }
 
+func TestEffortCommandShowsCurrentAndSwitches(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	a.setBinding(123, "ses_1")
+	allowModelSwitching(t, a)
+	foc.sessionModel = occlient.ModelRef{
+		ID: "deepseek-v4-flash", ProviderID: "opencode-go", Variant: "medium",
+	}
+
+	a.handleCommand(123, 123, "/effort")
+
+	all := ftg.allText()
+	for _, want := range []string{
+		"**🎚 Effort level**",
+		"Current effort: `medium`",
+	} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("effort message missing %q:\n%s", want, all)
+		}
+	}
+	if markup := ftg.lastReplyMarkup(); !strings.Contains(markup, "✅ medium") {
+		t.Fatalf("effort buttons do not mark the current variant: %s", markup)
+	}
+	for _, variant := range []string{"low", "medium", "high"} {
+		if _, act := findAction(t, a, "effort", variant); act.ModelID != "deepseek-v4-flash" {
+			t.Fatalf("effort action %q model = %q", variant, act.ModelID)
+		}
+	}
+
+	token, _ := findAction(t, a, "effort", "low")
+	a.handleCallbackFrom(123, 42, callbackData(token))
+
+	foc.mu.Lock()
+	switched := foc.switchedModel
+	foc.mu.Unlock()
+	if switched.Key() != "opencode-go/deepseek-v4-flash" || switched.Variant != "low" {
+		t.Fatalf("switched effort model = %+v", switched)
+	}
+	if got := ftg.lastText(); !strings.Contains(got, "Effort set to `low`") {
+		t.Fatalf("effort feedback = %q", got)
+	}
+}
+
+func TestEffortCommandRequiresModelSwitching(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+	a.setBinding(123, "ses_1")
+
+	a.handleCommand(123, 123, "/effort")
+
+	if got := ftg.lastText(); !strings.Contains(got, "does not allow choosing models") {
+		t.Fatalf("effort disabled feedback = %q", got)
+	}
+}
+
+func TestNewSessionUsesLastUsedModel(t *testing.T) {
+	a, _, foc := newIntegrationApp(t)
+	a.setBinding(123, "ses_1")
+	allowNewMessages(t, a)
+	foc.sessions = []occlient.Session{{
+		ID:       "ses_recent",
+		Model:    occlient.ModelRef{ID: "gpt-6", ProviderID: "opencode", Variant: "high"},
+		Location: occlient.Location{Directory: "/tmp/project"},
+	}}
+
+	a.handleCommand(123, 123, "/new")
+
+	foc.mu.Lock()
+	model := foc.createdModel
+	foc.mu.Unlock()
+	if model == nil {
+		t.Fatal("new session was created without a model")
+	}
+	if model.Key() != "opencode/gpt-6" || model.Variant != "high" {
+		t.Fatalf("new session model = %+v", model)
+	}
+}
+
+func TestPromptUsesLastUsedModelWhenSessionHasNone(t *testing.T) {
+	a, _, foc := newIntegrationApp(t)
+	a.setBinding(123, "ses_1")
+	allowNewMessages(t, a)
+	foc.sessionModel = occlient.ModelRef{}
+	foc.sessions = []occlient.Session{{
+		ID:       "ses_recent",
+		Model:    occlient.ModelRef{ID: "gpt-6", ProviderID: "opencode", Variant: "high"},
+		Location: occlient.Location{Directory: "/tmp/project"},
+	}}
+
+	a.handleFreeText(123, "continue")
+
+	foc.mu.Lock()
+	switched := foc.switchedModel
+	prompt := foc.prompt
+	foc.mu.Unlock()
+	if switched.Key() != "opencode/gpt-6" || switched.Variant != "high" {
+		t.Fatalf("prompt model = %+v", switched)
+	}
+	if prompt != "continue" {
+		t.Fatalf("prompt text = %q", prompt)
+	}
+}
+
 func TestModelsCommandDisabledByConfiguration(t *testing.T) {
 	a, ftg, _ := newIntegrationApp(t)
 	a.setBinding(123, "ses_1")
@@ -586,12 +723,12 @@ func TestStartAndHelpHaveDistinctMarkdownContent(t *testing.T) {
 	if start == help {
 		t.Fatalf("/start and /help must not be identical:\n%s", start)
 	}
-	for _, want := range []string{"**👋 Welcome to OpenCode Telegram**", "**Quick start**", "`/sessions`", "`/help`"} {
+	for _, want := range []string{"**👋 Welcome to OpenCode Telegram**", "**Quick start**", "`/sessions`", "`/help`", "**Bot version:** `test`"} {
 		if !strings.Contains(start, want) {
 			t.Fatalf("start guide is missing %q:\n%s", want, start)
 		}
 	}
-	for _, want := range []string{"**OpenCode Telegram — Help**", "**Commands**", "`/sessions`", "`/settings`"} {
+	for _, want := range []string{"**OpenCode Telegram — Help**", "**Commands**", "`/sessions`", "`/settings`", "`/branch`"} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("help is missing %q:\n%s", want, help)
 		}
@@ -604,6 +741,127 @@ func TestStartAndHelpHaveDistinctMarkdownContent(t *testing.T) {
 	a.handleCommand(123, 123, "/help")
 	if !strings.Contains(ftg.lastText(), "`/new`") {
 		t.Fatalf("/new missing after enabling new messages:\n%s", ftg.lastText())
+	}
+}
+
+func TestStatusUsesMarkdown(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+	a.setBinding(123, "ses_1")
+
+	a.handleCommand(123, 123, "/status")
+
+	got := ftg.lastText()
+	for _, want := range []string{
+		"**📊 Status**",
+		"**OpenCode",
+		"- **Endpoint:**",
+		"- **Daemon version:** `test`",
+		"- **Allowlist:**",
+		"- **Bound session:**",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("status is missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestBranchCommandShowsBoundSessionBranch(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	a.setBinding(123, "ses_1")
+	foc.vcs = occlient.VCSInfo{
+		Provider: "git",
+		Branch:   occlient.VCSBranch{Current: "feature/test", Default: "main"},
+	}
+
+	a.handleCommand(123, 123, "/branch")
+
+	got := ftg.lastText()
+	for _, want := range []string{
+		"**🌿 Git branch**",
+		"- **Directory:** `/tmp/project`",
+		"- **Current branch:** `feature/test`",
+		"- **Default branch:** `main`",
+		"- **Provider:** `git`",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("branch output is missing %q:\n%s", want, got)
+		}
+	}
+	foc.mu.Lock()
+	dir := foc.vcsDir
+	foc.mu.Unlock()
+	if dir != "/tmp/project" {
+		t.Fatalf("branch queried directory %q, want /tmp/project", dir)
+	}
+}
+
+func TestBranchCommandHandlesNonGitLocation(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+	a.setBinding(123, "ses_1")
+
+	a.handleCommand(123, 123, "/branch")
+
+	if got := ftg.lastText(); !strings.Contains(got, "not a git repository") {
+		t.Fatalf("non-git branch output = %q", got)
+	}
+}
+
+func TestImageMessageAttachesImageToPrompt(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	allowNewMessages(t, a)
+	a.setBinding(123, "ses_1")
+	ftg.fileData = []byte("fake-jpeg-data")
+
+	a.handleUpdate(tgbotapi.Update{Message: &tgbotapi.Message{
+		MessageID: 7,
+		From:      &tgbotapi.User{ID: 123},
+		Chat:      &tgbotapi.Chat{ID: 123},
+		Caption:   "What is this?",
+		Photo: []tgbotapi.PhotoSize{
+			{FileID: "small", Width: 10, Height: 10},
+			{FileID: "large", Width: 100, Height: 100},
+		},
+	}})
+
+	foc.mu.Lock()
+	prompt := foc.prompt
+	files := append([]occlient.FileAttachment(nil), foc.promptFiles...)
+	foc.mu.Unlock()
+	if prompt != "What is this?" {
+		t.Fatalf("prompt text = %q", prompt)
+	}
+	if len(files) != 1 {
+		t.Fatalf("attachments = %d, want 1", len(files))
+	}
+	if !strings.HasPrefix(files[0].URI, "data:image/jpeg;base64,") {
+		t.Fatalf("attachment uri = %q", files[0].URI)
+	}
+	if files[0].Source.Type != "inline" || files[0].Name != "photo.jpg" {
+		t.Fatalf("attachment = %+v", files[0])
+	}
+	if got := ftg.lastText(); !strings.Contains(got, "Sent image") {
+		t.Fatalf("image feedback = %q", got)
+	}
+}
+
+func TestImageMessageRequiresNewMessages(t *testing.T) {
+	a, ftg, foc := newIntegrationApp(t)
+	a.setBinding(123, "ses_1")
+
+	a.handleUpdate(tgbotapi.Update{Message: &tgbotapi.Message{
+		MessageID: 7,
+		From:      &tgbotapi.User{ID: 123},
+		Chat:      &tgbotapi.Chat{ID: 123},
+		Photo:     []tgbotapi.PhotoSize{{FileID: "file_1", Width: 10, Height: 10}},
+	}})
+
+	if got := ftg.lastText(); !strings.Contains(got, "Image messages are disabled") {
+		t.Fatalf("disabled image feedback = %q", got)
+	}
+	foc.mu.Lock()
+	defer foc.mu.Unlock()
+	if len(foc.promptFiles) != 0 {
+		t.Fatalf("prompt files sent while disabled: %+v", foc.promptFiles)
 	}
 }
 

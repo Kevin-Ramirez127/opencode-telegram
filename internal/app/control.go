@@ -15,14 +15,16 @@ import (
 // commands with the same name are left untouched, so operators can keep their
 // own descriptions and any extra commands they registered with BotFather.
 var botCommands = []tgbotapi.BotCommand{
-	{Command: "start", Description: "Introduce the bot and quick start"},
+	{Command: "start", Description: "Welcome guide and quick start"},
 	{Command: "help", Description: "Show the command list"},
 	{Command: "status", Description: "Daemon and OpenCode status"},
+	{Command: "branch", Description: "Show the bound session's current git branch"},
 	{Command: "sessions", Description: "List sessions with bind buttons"},
 	{Command: "bind", Description: "Bind this chat to a session"},
 	{Command: "unbind", Description: "Remove the session binding"},
 	{Command: "agents", Description: "List or switch the bound session's agent"},
 	{Command: "models", Description: "List all available chat models"},
+	{Command: "effort", Description: "Choose the bound model's effort level"},
 	{Command: "usage", Description: "Show OpenCode Go and Console usage limits"},
 	{Command: "lastmessage", Description: "Show the bound session's last assistant message"},
 	{Command: "interrupt", Description: "Stop the bound session's current run"},

@@ -44,6 +44,7 @@ type App struct {
 	quit             chan struct{}
 	quitOnce         sync.Once
 	poweroff         func(context.Context) error
+	telegramFileBase string
 	syncMu           sync.Mutex
 	explicitURL      bool
 	explicitPassword bool
@@ -82,6 +83,7 @@ func New(cfg *config.Config, bot *tgbotapi.BotAPI, oc *occlient.Client, wl *whit
 		updates:          make(chan occlient.Event, 4096),
 		quit:             make(chan struct{}),
 		poweroff:         systemPowerOff,
+		telegramFileBase: "https://api.telegram.org/file/bot",
 		explicitURL:      cfg.OpenCodeURLExplicit,
 		explicitPassword: cfg.OpenCodePasswordExplicit,
 		sessions:         make(map[string]*sessionState),
@@ -437,6 +439,7 @@ type action struct {
 	FormID    string
 	FieldKey  string
 	RequestID string
+	ModelID   string
 	Value     string
 	Decision  string
 	ChatID    int64

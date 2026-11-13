@@ -197,15 +197,20 @@ type AgentInfo struct {
 	Model       *ModelRef `json:"model,omitempty"`
 }
 
+type ModelVariant struct {
+	ID string `json:"id"`
+}
+
 type ModelInfo struct {
-	ID         string `json:"id"`
-	ModelID    string `json:"modelID"`
-	ProviderID string `json:"providerID"`
-	Name       string `json:"name"`
-	Type       string `json:"type,omitempty"`
-	Family     string `json:"family,omitempty"`
-	Status     string `json:"status"`
-	Enabled    bool   `json:"enabled"`
+	ID         string         `json:"id"`
+	ModelID    string         `json:"modelID"`
+	ProviderID string         `json:"providerID"`
+	Name       string         `json:"name"`
+	Type       string         `json:"type,omitempty"`
+	Family     string         `json:"family,omitempty"`
+	Status     string         `json:"status"`
+	Enabled    bool           `json:"enabled"`
+	Variants   []ModelVariant `json:"variants,omitempty"`
 }
 
 func (s Session) DisplayTitle() string {
@@ -345,6 +350,31 @@ func (c *Client) Info(ctx context.Context) (map[string]any, error) {
 	return out, err
 }
 
+type VCSBranch struct {
+	Current string `json:"current,omitempty"`
+	Default string `json:"default,omitempty"`
+}
+
+type VCSInfo struct {
+	Provider string    `json:"provider,omitempty"`
+	Branch   VCSBranch `json:"branch"`
+}
+
+// VCSInfo returns the current and default branch for a location. An empty
+// directory asks OpenCode for its default location. A location that is not a
+// git repository returns an empty VCSInfo without an error.
+func (c *Client) VCSInfo(ctx context.Context, directory string) (VCSInfo, error) {
+	var out struct {
+		Data VCSInfo `json:"data"`
+	}
+	path := "/api/vcs"
+	if q := locationQuery(directory); len(q) > 0 {
+		path += "?" + q
+	}
+	err := c.do(ctx, http.MethodGet, path, nil, &out)
+	return out.Data, err
+}
+
 func (c *Client) ListSessions(ctx context.Context, limit int) ([]Session, error) {
 	if limit <= 0 {
 		limit = 20
@@ -388,15 +418,40 @@ func (c *Client) GetSession(ctx context.Context, sessionID string) (Session, err
 // CreateSession creates a session at directory. An empty directory uses the
 // server's default location.
 func (c *Client) CreateSession(ctx context.Context, directory string) (Session, error) {
+	return c.CreateSessionWithModel(ctx, directory, nil)
+}
+
+// CreateSessionWithModel creates a session with an explicit model. A nil model
+// leaves the selection to OpenCode.
+func (c *Client) CreateSessionWithModel(ctx context.Context, directory string, model *ModelRef) (Session, error) {
 	body := map[string]any{}
 	if dir := strings.TrimSpace(directory); dir != "" {
 		body["location"] = map[string]string{"directory": dir}
+	}
+	if model != nil && model.Key() != "" {
+		body["model"] = model
 	}
 	var out struct {
 		Data Session `json:"data"`
 	}
 	err := c.do(ctx, http.MethodPost, "/api/session", body, &out)
 	return out.Data, err
+}
+
+// DefaultModel returns the model OpenCode uses when a session has no explicit
+// model selection. A nil result means no default is configured.
+func (c *Client) DefaultModel(ctx context.Context, directory string) (*ModelInfo, error) {
+	var out struct {
+		Data *ModelInfo `json:"data"`
+	}
+	path := "/api/model/default"
+	if q := locationQuery(directory); len(q) > 0 {
+		path += "?" + q
+	}
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Data, nil
 }
 
 // ListAgents returns the agents registered for a location (usually the
@@ -607,12 +662,32 @@ func (c *Client) ReplyPermission(ctx context.Context, sessionID, requestID, deci
 	return c.do(ctx, http.MethodPost, path, body, nil)
 }
 
-func (c *Client) Prompt(ctx context.Context, sessionID, text string) error {
+// FileSource tells OpenCode where an attachment comes from. Images sent from
+// Telegram are embedded inline as data URIs, so Type is "inline".
+type FileSource struct {
+	Type string `json:"type"`
+	URI  string `json:"uri,omitempty"`
+}
+
+// FileAttachment is one file sent with a prompt. URI accepts a data URI for
+// inline images.
+type FileAttachment struct {
+	URI         string     `json:"uri"`
+	Source      FileSource `json:"source"`
+	Name        string     `json:"name,omitempty"`
+	Description string     `json:"description,omitempty"`
+}
+
+func (c *Client) Prompt(ctx context.Context, sessionID, text string, files ...FileAttachment) error {
 	path := "/api/session/" + url.PathEscape(sessionID) + "/prompt"
-	return c.do(ctx, http.MethodPost, path, map[string]any{
+	body := map[string]any{
 		"text":     text,
 		"delivery": "queue",
-	}, nil)
+	}
+	if len(files) > 0 {
+		body["files"] = files
+	}
+	return c.do(ctx, http.MethodPost, path, body, nil)
 }
 
 // Generate asks OpenCode for transient text from the session context. It uses
