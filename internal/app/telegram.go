@@ -275,17 +275,20 @@ func (a *App) showSessions(chatID int64) {
 	defer cancel()
 	sessions, err := a.recentSessions(ctx, 10)
 	if err != nil {
-		a.send(chatID, fmt.Sprintf("❌ Could not list sessions: %v", err))
+		a.send(chatID, fmt.Sprintf("❌ **Could not list sessions**\n%v", err))
 		return
 	}
 	if len(sessions) == 0 {
-		a.send(chatID, "No sessions found.")
+		a.send(chatID, "**🗂 Recent sessions**\n\nNo sessions found.")
 		return
 	}
 
 	bound := a.binding(chatID)
 	boundInList := false
-	for _, s := range sessions {
+	lines := []string{"**🗂 Recent sessions**", ""}
+	rows := make([][]tgbotapi.InlineKeyboardButton, 0, len(sessions)+1)
+
+	for i, s := range sessions {
 		isBound := s.ID == bound
 		if isBound {
 			boundInList = true
@@ -295,40 +298,42 @@ func (a *App) showSessions(chatID int64) {
 		if title == "" {
 			title = s.ID
 		}
-		directory := strings.TrimSpace(s.Location.Directory)
+		directory := truncateOneLine(strings.TrimSpace(s.Location.Directory), 160)
 		if directory == "" {
 			directory = "default location"
 		}
 
-		var b strings.Builder
-		fmt.Fprintf(&b, "**%s**\n", title)
-		fmt.Fprintf(&b, "📁 `%s`\n", directory)
+		lines = append(lines, fmt.Sprintf("- **%d. %s**", i+1, markdownInline(title)))
+		lines = append(lines, fmt.Sprintf("  - 📁 %s", markdownCode(directory)))
 		if st := a.sessionSnapshot(s.ID); st.Busy {
-			b.WriteString("⚡ **Running now**\n")
+			lines = append(lines, "  - ⚡ **Running now**")
 		}
 		if isBound {
-			b.WriteString("✅ **Currently bound**\n")
+			lines = append(lines, "  - ✅ **Currently bound**")
 		}
 
+		label := fmt.Sprintf("%d. %s", i+1, truncateOneLine(title, 40))
 		var button tgbotapi.InlineKeyboardButton
 		if isBound {
 			token := a.addAction(action{Kind: "unbind", ChatID: chatID})
-			button = tgbotapi.NewInlineKeyboardButtonData("🔓 Unbind", callbackData(token))
+			button = tgbotapi.NewInlineKeyboardButtonData("🔓 "+label, callbackData(token))
 		} else {
 			token := a.addAction(action{Kind: "bind", SessionID: s.ID, ChatID: chatID})
-			button = tgbotapi.NewInlineKeyboardButtonData("🔗 Bind this session", callbackData(token))
+			button = tgbotapi.NewInlineKeyboardButtonData("🔗 "+label, callbackData(token))
 		}
-		markup := tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(button))
-		a.sendMarkup(chatID, strings.TrimSpace(b.String()), markup)
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(button))
 	}
 
 	if bound != "" && !boundInList {
 		token := a.addAction(action{Kind: "unbind", ChatID: chatID})
-		markup := tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("🔓 Unbind", callbackData(token)),
+		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("🔓 Unbind current session", callbackData(token)),
 		))
-		a.sendMarkup(chatID, fmt.Sprintf("**📌 Currently bound**\n%s", a.sessionLabel(bound)), markup)
+		lines = append(lines, "", fmt.Sprintf("- **📌 Currently bound:** %s", markdownInline(a.sessionLabel(bound))))
 	}
+
+	lines = append(lines, "", "Tap a button below to bind or unbind.")
+	a.sendMarkup(chatID, strings.Join(lines, "\n"), tgbotapi.NewInlineKeyboardMarkup(rows...))
 }
 
 func (a *App) bindSession(chatID int64, sessionID string) {
@@ -350,7 +355,7 @@ func (a *App) bindSession(chatID int64, sessionID string) {
 	if directory == "" {
 		directory = "default location"
 	}
-	a.send(chatID, fmt.Sprintf("**🔗 Bound to %s**\n📁 `%s`", sess.DisplayTitle(), directory))
+	a.send(chatID, fmt.Sprintf("**🔗 Bound to %s**\n📁 %s", markdownInline(sess.DisplayTitle()), markdownCode(directory)))
 }
 
 func (a *App) showLastMessage(chatID int64) {
@@ -718,7 +723,50 @@ func (a *App) handleCallbackFrom(chatID int64, messageID int, data string) {
 
 func (a *App) bindFromCallback(chatID int64, act action) {
 	a.setBinding(chatID, act.SessionID)
-	a.send(chatID, fmt.Sprintf("🔗 Bound to: %s", a.sessionLabel(act.SessionID)))
+	a.send(chatID, fmt.Sprintf("**🔗 Bound to %s**", markdownInline(a.sessionLabel(act.SessionID))))
+}
+
+// ---------------------------------------------------------------------------
+// Markdown helpers
+// ---------------------------------------------------------------------------
+
+// markdownInline escapes user-provided text so it can sit inside Markdown
+// prose (for example a bold session title) without breaking the surrounding
+// formatting. Session titles are arbitrary, and a stray * or _ used to make
+// the rich message fail to parse and fall back to raw plain text.
+func markdownInline(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for _, r := range s {
+		switch r {
+		case '\\', '`', '*', '_', '[', ']', '<', '>', '#', '|', '~', '{', '}', '(', ')', '+', '-', '.', '!':
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// markdownCode wraps text in a code span, extending the fence when the text
+// itself contains backticks. Paths and IDs stay literal (and copyable).
+func markdownCode(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	longest, run := 0, 0
+	for _, r := range s {
+		if r == '`' {
+			run++
+			if run > longest {
+				longest = run
+			}
+		} else {
+			run = 0
+		}
+	}
+	fence := strings.Repeat("`", longest+1)
+	if longest > 0 {
+		return fence + " " + s + " " + fence
+	}
+	return fence + s + fence
 }
 
 // ---------------------------------------------------------------------------

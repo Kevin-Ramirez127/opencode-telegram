@@ -718,7 +718,7 @@ func TestNotifyShowsCurrentStateWithToggleButtons(t *testing.T) {
 	}
 }
 
-func TestSessionsSendsOneMessagePerSession(t *testing.T) {
+func TestSessionsSendsMarkdownBulletList(t *testing.T) {
 	a, ftg, foc := newIntegrationApp(t)
 	foc.sessions = []occlient.Session{
 		{ID: "ses_1", Title: "Build the thing", Location: occlient.Location{Directory: "/tmp/project"}},
@@ -729,16 +729,26 @@ func TestSessionsSendsOneMessagePerSession(t *testing.T) {
 	a.handleCommand(123, 123, "/sessions")
 
 	texts := ftg.allTexts()
-	if len(texts) != 2 {
-		t.Fatalf("sent %d session messages, want 2:\n%s", len(texts), ftg.allText())
+	if len(texts) != 1 {
+		t.Fatalf("sent %d session messages, want 1:\n%s", len(texts), ftg.allText())
 	}
-	all := ftg.allText()
+	all := texts[0]
 	for _, want := range []string{
-		"**Build the thing**", "`/tmp/project`", "Currently bound",
-		"**Write docs**", "`/tmp/docs`",
+		"**🗂 Recent sessions**",
+		"- **1. Build the thing**",
+		"  - 📁 `/tmp/project`",
+		"  - ✅ **Currently bound**",
+		"- **2. Write docs**",
+		"  - 📁 `/tmp/docs`",
 	} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("session listing missing %q:\n%s", want, all)
+		}
+	}
+	markup := ftg.lastReplyMarkup()
+	for _, want := range []string{"🔓 1. Build the thing", "🔗 2. Write docs"} {
+		if !strings.Contains(markup, want) {
+			t.Fatalf("session buttons missing %q: %s", want, markup)
 		}
 	}
 
