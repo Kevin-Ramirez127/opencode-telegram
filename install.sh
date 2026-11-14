@@ -312,6 +312,18 @@ if $DO_PLUGIN; then
   register_plugin
 fi
 
+# --- 8b. version marker -------------------------------------------------------
+INSTALL_MODE="plugin"
+if $DO_DAEMON && $DO_PLUGIN; then INSTALL_MODE="daemon+plugin"
+elif $DO_DAEMON; then INSTALL_MODE="daemon"; fi
+APP_VERSION="$("$APP_DIR/bin/opencode-telegram" --version 2>/dev/null | awk '{print $2}' || true)"
+printf 'version=%s\ncommit=%s\ndate=%s\nmode=%s\n' \
+  "${APP_VERSION:-unknown}" \
+  "$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  "$INSTALL_MODE" > "$APP_DIR/.installed-version"
+chmod 600 "$APP_DIR/.installed-version"
+
 # --- 9. systemd user unit (optional) ------------------------------------------
 if $SYSTEMD; then
   UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
