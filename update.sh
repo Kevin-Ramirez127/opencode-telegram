@@ -7,6 +7,12 @@
 #   git pull
 #   ./update.sh
 #
+# The installed command runs the same updater from the checkout recorded by
+# install.sh:
+#
+#   opencode-telegram update
+#   opencode-telegram update --pull --dry-run
+#
 # It rebuilds the daemon and refreshes the installed copy + OpenCode plugin
 # while leaving your state untouched:
 #

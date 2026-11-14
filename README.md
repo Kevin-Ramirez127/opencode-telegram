@@ -118,6 +118,19 @@ git pull
 ./update.sh
 ```
 
+The installed command does the same thing from anywhere, using the checkout
+recorded when you installed:
+
+```bash
+opencode-telegram update
+opencode-telegram update --pull
+opencode-telegram update --dry-run
+```
+
+Keep the original checkout around: the updater builds from it (binary, plugin,
+templates, `install.sh`). If it moved, re-run `./install.sh` from the new
+location once.
+
 The updater rebuilds and reinstalls the daemon and plugin in the same layout.
 Your state is kept: `.env`, `data/allowlist.json`, `data/settings.json`, logs,
 and any extra files in `data/` are never overwritten or deleted. Before doing

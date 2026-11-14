@@ -291,6 +291,18 @@ exec "$APP_DIR/scripts/daemon.sh" "\$@"
 EOF
   chmod +x "$INSTALL_DIR/$INSTALL_NAME"
   info "installed $INSTALL_DIR/$INSTALL_NAME (runs $APP_DIR)"
+
+  # Remember where this install came from so `opencode-telegram update` can
+  # re-run the updater from the checkout (the checkout owns the build sources).
+  {
+    printf 'SRC_REPO=%q\n' "$ROOT_DIR"
+    printf 'SRC_PREFIX=%q\n' "$PREFIX"
+    printf 'SRC_INSTALL_DIR=%q\n' "$INSTALL_DIR"
+    printf 'SRC_APP_DIR=%q\n' "$APP_DIR"
+    printf 'SRC_DATE=%q\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$APP_DIR/.install-source"
+  chmod 644 "$APP_DIR/.install-source"
+
   case ":${PATH:-}:" in
     *":$INSTALL_DIR:"*) ;;
     *) echo "note: $INSTALL_DIR is not on your PATH — add 'export PATH=\"\$HOME/.local/bin:\$PATH\"' to your shell rc" >&2 ;;
@@ -369,6 +381,9 @@ if $DO_DAEMON; then
   step "Optionally start the daemon now (the OpenCode plugin starts it when needed):"
   echo "       opencode-telegram start"
   echo "       opencode-telegram logs -f"
+  echo
+  step "Update later from this checkout (keeps .env and data/):"
+  echo "       opencode-telegram update"
   echo
 fi
 if $DO_PLUGIN; then
