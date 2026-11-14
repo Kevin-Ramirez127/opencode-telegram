@@ -19,6 +19,8 @@
 #   ./scripts/daemon.sh settings [show|edit]   show or edit settings.json
 #   ./scripts/daemon.sh simulate [scenario]    send premade conversations to Telegram
 #   ./scripts/daemon.sh update [options]       rebuild + reinstall from the source checkout
+#   ./scripts/daemon.sh version                print the installed app version
+#   ./scripts/daemon.sh --version              alias for version
 #
 # update options: every ./update.sh flag, e.g. --dry-run, --pull, --rollback
 #   latest, --daemon, --plugin, --no-restart, --list-backups.
@@ -386,6 +388,15 @@ cmd_update() {
   APP_DIR="$ROOT" PREFIX="$prefix" INSTALL_DIR="$install_dir" exec "$repo/update.sh" "$@"
 }
 
+cmd_version() {
+  local v
+  if [[ -x "$BIN" ]]; then
+    exec "$BIN" --version
+  fi
+  v="$(sed -n 's/^version=//p' "$ROOT/.installed-version" 2>/dev/null | head -n1)"
+  printf 'opencode-telegram %s\n' "${v:-unknown}"
+}
+
 usage() {
   sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
 }
@@ -405,6 +416,7 @@ case "$cmd" in
   settings) cmd_settings "${1:-show}" ;;
   simulate) cmd_simulate "${1:-all}" ;;
   update)  cmd_update "$@" ;;
+  version|--version|-v) cmd_version ;;
   help|-h|--help|"") usage ;;
-  *) fail "unknown command '$cmd' (try: start|stop|restart|status|logs|reload|run|check|config|settings|simulate|update)" ;;
+  *) fail "unknown command '$cmd' (try: start|stop|restart|status|logs|reload|run|check|config|settings|simulate|update|version)" ;;
 esac

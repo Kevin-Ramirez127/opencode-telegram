@@ -99,6 +99,9 @@ opencode-telegram logs -f
 opencode-telegram status
 opencode-telegram reload
 opencode-telegram stop
+
+# 4. Version
+opencode-telegram --version
 ```
 
 For a persistent user service:
@@ -520,6 +523,7 @@ Layout:
 
 ```
 main.go                     wiring, flags, discovery
+VERSION                     app version, embedded in the binary at build time
 internal/config             env/.env + paths
 internal/occlient           OpenCode API client, SSE stream, discovery
 internal/app                daemon state, Telegram, forms, permissions, HTTP API

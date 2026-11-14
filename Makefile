@@ -46,7 +46,7 @@ simulate:
 	./scripts/simulate.sh $(SCENARIO)
 
 build:
-	go build -ldflags "-X main.version=$$(git describe --tags --always --dirty 2>/dev/null || echo dev)" -o $(BIN) .
+	go build -o $(BIN) .
 
 run: build
 	./$(BIN)

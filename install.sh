@@ -83,11 +83,11 @@ fi
 
 # --- 2. build -----------------------------------------------------------------
 if $DO_DAEMON; then
-  VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
+  VERSION="$(cat VERSION 2>/dev/null || echo dev)"
   info "building bin/opencode-telegram ($VERSION)..."
   mkdir -p bin
   go mod download
-  go build -ldflags "-X main.version=$VERSION" -o bin/opencode-telegram . || fail "build failed"
+  go build -o bin/opencode-telegram . || fail "build failed"
   chmod +x bin/opencode-telegram
   info "build ok"
 fi
