@@ -349,7 +349,7 @@ Change them from the plugin (which asks for confirmation) or by editing
 | `/start` | Markdown introduction and quick-start guide |
 | `/help` | Markdown command list and security notes |
 | `/status` | Daemon, OpenCode, allowlist, and pending-work status |
-| `/sessions` | Markdown list: one message per recent session with its path and a bind button |
+| `/sessions` | Markdown bullet list of recent sessions, with a bind button for each |
 | `/bind <session-id>` | Bind this chat to a session |
 | `/new` | Create a new session and bind it (requires `allow_new_messages`) |
 | `/unbind` | Remove the binding |
