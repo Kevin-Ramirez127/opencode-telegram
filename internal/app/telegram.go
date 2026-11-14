@@ -248,6 +248,7 @@ func (a *App) showStatus(chatID int64) {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s OpenCode %s\n", icon, state)
+	fmt.Fprintf(&b, "Version: %s\n", snap.Version)
 	fmt.Fprintf(&b, "Endpoint: %s\n", snap.OpenCodeURL)
 	if snap.OpenCodeVer != "" {
 		fmt.Fprintf(&b, "Server version: %s\n", snap.OpenCodeVer)
