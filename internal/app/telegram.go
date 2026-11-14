@@ -285,7 +285,7 @@ func (a *App) showSessions(chatID int64) {
 
 	bound := a.binding(chatID)
 	boundInList := false
-	for _, s := range sessions {
+	for i, s := range sessions {
 		isBound := s.ID == bound
 		if isBound {
 			boundInList = true
@@ -301,8 +301,8 @@ func (a *App) showSessions(chatID int64) {
 		}
 
 		var b strings.Builder
-		fmt.Fprintf(&b, "**%s**\n", title)
-		fmt.Fprintf(&b, "📁 `%s`\n", directory)
+		fmt.Fprintf(&b, "**%d. %s**\n", i+1, markdownInline(title))
+		fmt.Fprintf(&b, "📁 %s\n", markdownCode(directory))
 		if st := a.sessionSnapshot(s.ID); st.Busy {
 			b.WriteString("⚡ **Running now**\n")
 		}
@@ -327,7 +327,7 @@ func (a *App) showSessions(chatID int64) {
 		markup := tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("🔓 Unbind", callbackData(token)),
 		))
-		a.sendMarkup(chatID, fmt.Sprintf("**📌 Currently bound**\n%s", a.sessionLabel(bound)), markup)
+		a.sendMarkup(chatID, fmt.Sprintf("**📌 Currently bound**\n%s", markdownInline(a.sessionLabel(bound))), markup)
 	}
 }
 
@@ -350,7 +350,7 @@ func (a *App) bindSession(chatID int64, sessionID string) {
 	if directory == "" {
 		directory = "default location"
 	}
-	a.send(chatID, fmt.Sprintf("**🔗 Bound to %s**\n📁 `%s`", sess.DisplayTitle(), directory))
+	a.send(chatID, fmt.Sprintf("**🔗 Bound to %s**\n📁 %s", markdownInline(sess.DisplayTitle()), markdownCode(directory)))
 }
 
 func (a *App) showLastMessage(chatID int64) {
@@ -718,7 +718,50 @@ func (a *App) handleCallbackFrom(chatID int64, messageID int, data string) {
 
 func (a *App) bindFromCallback(chatID int64, act action) {
 	a.setBinding(chatID, act.SessionID)
-	a.send(chatID, fmt.Sprintf("🔗 Bound to: %s", a.sessionLabel(act.SessionID)))
+	a.send(chatID, fmt.Sprintf("**🔗 Bound to %s**", markdownInline(a.sessionLabel(act.SessionID))))
+}
+
+// ---------------------------------------------------------------------------
+// Markdown helpers
+// ---------------------------------------------------------------------------
+
+// markdownInline escapes user-provided text so it can sit inside Markdown
+// prose (for example a bold session title) without breaking the surrounding
+// formatting. Session titles are arbitrary, and a stray * or _ used to make
+// the rich message fail to parse and fall back to raw plain text.
+func markdownInline(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for _, r := range s {
+		switch r {
+		case '\\', '`', '*', '_', '[', ']', '<', '>', '#', '|', '~', '{', '}', '(', ')', '+', '-', '.', '!':
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// markdownCode wraps text in a code span, extending the fence when the text
+// itself contains backticks. Paths and IDs stay literal (and copyable).
+func markdownCode(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	longest, run := 0, 0
+	for _, r := range s {
+		if r == '`' {
+			run++
+			if run > longest {
+				longest = run
+			}
+		} else {
+			run = 0
+		}
+	}
+	fence := strings.Repeat("`", longest+1)
+	if longest > 0 {
+		return fence + " " + s + " " + fence
+	}
+	return fence + s + fence
 }
 
 // ---------------------------------------------------------------------------

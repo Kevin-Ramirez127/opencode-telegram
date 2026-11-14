@@ -734,8 +734,8 @@ func TestSessionsSendsOneMessagePerSession(t *testing.T) {
 	}
 	all := ftg.allText()
 	for _, want := range []string{
-		"**Build the thing**", "`/tmp/project`", "Currently bound",
-		"**Write docs**", "`/tmp/docs`",
+		"**1. Build the thing**", "`/tmp/project`", "Currently bound",
+		"**2. Write docs**", "`/tmp/docs`",
 	} {
 		if !strings.Contains(all, want) {
 			t.Fatalf("session listing missing %q:\n%s", want, all)
