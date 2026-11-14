@@ -247,25 +247,25 @@ func (a *App) showStatus(chatID int64) {
 	bound := a.binding(chatID)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s OpenCode %s\n", icon, state)
-	fmt.Fprintf(&b, "Version: %s\n", snap.Version)
-	fmt.Fprintf(&b, "Endpoint: %s\n", snap.OpenCodeURL)
+	fmt.Fprintf(&b, "%s **OpenCode %s**\n\n", icon, state)
+	fmt.Fprintf(&b, "- **Version:** `%s`\n", snap.Version)
+	fmt.Fprintf(&b, "- **Endpoint:** `%s`\n", snap.OpenCodeURL)
 	if snap.OpenCodeVer != "" {
-		fmt.Fprintf(&b, "Server version: %s\n", snap.OpenCodeVer)
+		fmt.Fprintf(&b, "- **Server version:** `%s`\n", snap.OpenCodeVer)
 	}
-	fmt.Fprintf(&b, "Daemon uptime: %s\n", time.Duration(snap.UptimeSec)*time.Second)
-	fmt.Fprintf(&b, "Allowlist: %d users, %d chats\n", snap.Users, snap.Chats)
-	fmt.Fprintf(&b, "Active sessions: %d\n", snap.Active)
-	fmt.Fprintf(&b, "Pending questions: %d\n", snap.PendingForm)
-	fmt.Fprintf(&b, "Pending permissions: %d\n", snap.PendingPerm)
-	fmt.Fprintf(&b, "Notifications: %s\n", onOff(st.Notifications.Enabled))
+	fmt.Fprintf(&b, "- **Daemon uptime:** `%s`\n", time.Duration(snap.UptimeSec)*time.Second)
+	fmt.Fprintf(&b, "- **Allowlist:** %d users, %d chats\n", snap.Users, snap.Chats)
+	fmt.Fprintf(&b, "- **Active sessions:** %d\n", snap.Active)
+	fmt.Fprintf(&b, "- **Pending questions:** %d\n", snap.PendingForm)
+	fmt.Fprintf(&b, "- **Pending permissions:** %d\n", snap.PendingPerm)
+	fmt.Fprintf(&b, "- **Notifications:** %s\n", onOff(st.Notifications.Enabled))
 	if bound == "" {
-		b.WriteString("Bound session: none\n")
+		b.WriteString("- **Bound session:** none\n")
 	} else {
-		fmt.Fprintf(&b, "Bound session: %s\n", a.sessionLabel(bound))
+		fmt.Fprintf(&b, "- **Bound session:** %s\n", a.sessionLabel(bound))
 	}
 	if snap.LastError != "" {
-		fmt.Fprintf(&b, "Last error: %s\n", snap.LastError)
+		fmt.Fprintf(&b, "\n**Last error:** %s\n", snap.LastError)
 	}
 	a.send(chatID, b.String())
 }
@@ -275,20 +275,17 @@ func (a *App) showSessions(chatID int64) {
 	defer cancel()
 	sessions, err := a.recentSessions(ctx, 10)
 	if err != nil {
-		a.send(chatID, fmt.Sprintf("❌ **Could not list sessions**\n%v", err))
+		a.send(chatID, fmt.Sprintf("❌ Could not list sessions: %v", err))
 		return
 	}
 	if len(sessions) == 0 {
-		a.send(chatID, "**🗂 Recent sessions**\n\nNo sessions found.")
+		a.send(chatID, "No sessions found.")
 		return
 	}
 
 	bound := a.binding(chatID)
 	boundInList := false
-	lines := []string{"**🗂 Recent sessions**", ""}
-	rows := make([][]tgbotapi.InlineKeyboardButton, 0, len(sessions)+1)
-
-	for i, s := range sessions {
+	for _, s := range sessions {
 		isBound := s.ID == bound
 		if isBound {
 			boundInList = true
@@ -298,42 +295,40 @@ func (a *App) showSessions(chatID int64) {
 		if title == "" {
 			title = s.ID
 		}
-		directory := truncateOneLine(strings.TrimSpace(s.Location.Directory), 160)
+		directory := strings.TrimSpace(s.Location.Directory)
 		if directory == "" {
 			directory = "default location"
 		}
 
-		lines = append(lines, fmt.Sprintf("- **%d. %s**", i+1, markdownInline(title)))
-		lines = append(lines, fmt.Sprintf("  - 📁 %s", markdownCode(directory)))
+		var b strings.Builder
+		fmt.Fprintf(&b, "**%s**\n", title)
+		fmt.Fprintf(&b, "📁 `%s`\n", directory)
 		if st := a.sessionSnapshot(s.ID); st.Busy {
-			lines = append(lines, "  - ⚡ **Running now**")
+			b.WriteString("⚡ **Running now**\n")
 		}
 		if isBound {
-			lines = append(lines, "  - ✅ **Currently bound**")
+			b.WriteString("✅ **Currently bound**\n")
 		}
 
-		label := fmt.Sprintf("%d. %s", i+1, truncateOneLine(title, 40))
 		var button tgbotapi.InlineKeyboardButton
 		if isBound {
 			token := a.addAction(action{Kind: "unbind", ChatID: chatID})
-			button = tgbotapi.NewInlineKeyboardButtonData("🔓 "+label, callbackData(token))
+			button = tgbotapi.NewInlineKeyboardButtonData("🔓 Unbind", callbackData(token))
 		} else {
 			token := a.addAction(action{Kind: "bind", SessionID: s.ID, ChatID: chatID})
-			button = tgbotapi.NewInlineKeyboardButtonData("🔗 "+label, callbackData(token))
+			button = tgbotapi.NewInlineKeyboardButtonData("🔗 Bind this session", callbackData(token))
 		}
-		rows = append(rows, tgbotapi.NewInlineKeyboardRow(button))
+		markup := tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(button))
+		a.sendMarkup(chatID, strings.TrimSpace(b.String()), markup)
 	}
 
 	if bound != "" && !boundInList {
 		token := a.addAction(action{Kind: "unbind", ChatID: chatID})
-		rows = append(rows, tgbotapi.NewInlineKeyboardRow(
-			tgbotapi.NewInlineKeyboardButtonData("🔓 Unbind current session", callbackData(token)),
+		markup := tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("🔓 Unbind", callbackData(token)),
 		))
-		lines = append(lines, "", fmt.Sprintf("- **📌 Currently bound:** %s", markdownInline(a.sessionLabel(bound))))
+		a.sendMarkup(chatID, fmt.Sprintf("**📌 Currently bound**\n%s", a.sessionLabel(bound)), markup)
 	}
-
-	lines = append(lines, "", "Tap a button below to bind or unbind.")
-	a.sendMarkup(chatID, strings.Join(lines, "\n"), tgbotapi.NewInlineKeyboardMarkup(rows...))
 }
 
 func (a *App) bindSession(chatID int64, sessionID string) {
@@ -355,7 +350,7 @@ func (a *App) bindSession(chatID int64, sessionID string) {
 	if directory == "" {
 		directory = "default location"
 	}
-	a.send(chatID, fmt.Sprintf("**🔗 Bound to %s**\n📁 %s", markdownInline(sess.DisplayTitle()), markdownCode(directory)))
+	a.send(chatID, fmt.Sprintf("**🔗 Bound to %s**\n📁 `%s`", sess.DisplayTitle(), directory))
 }
 
 func (a *App) showLastMessage(chatID int64) {
@@ -723,50 +718,7 @@ func (a *App) handleCallbackFrom(chatID int64, messageID int, data string) {
 
 func (a *App) bindFromCallback(chatID int64, act action) {
 	a.setBinding(chatID, act.SessionID)
-	a.send(chatID, fmt.Sprintf("**🔗 Bound to %s**", markdownInline(a.sessionLabel(act.SessionID))))
-}
-
-// ---------------------------------------------------------------------------
-// Markdown helpers
-// ---------------------------------------------------------------------------
-
-// markdownInline escapes user-provided text so it can sit inside Markdown
-// prose (for example a bold session title) without breaking the surrounding
-// formatting. Session titles are arbitrary, and a stray * or _ used to make
-// the rich message fail to parse and fall back to raw plain text.
-func markdownInline(s string) string {
-	var b strings.Builder
-	b.Grow(len(s) + 8)
-	for _, r := range s {
-		switch r {
-		case '\\', '`', '*', '_', '[', ']', '<', '>', '#', '|', '~', '{', '}', '(', ')', '+', '-', '.', '!':
-			b.WriteByte('\\')
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
-}
-
-// markdownCode wraps text in a code span, extending the fence when the text
-// itself contains backticks. Paths and IDs stay literal (and copyable).
-func markdownCode(s string) string {
-	s = strings.ReplaceAll(s, "\n", " ")
-	longest, run := 0, 0
-	for _, r := range s {
-		if r == '`' {
-			run++
-			if run > longest {
-				longest = run
-			}
-		} else {
-			run = 0
-		}
-	}
-	fence := strings.Repeat("`", longest+1)
-	if longest > 0 {
-		return fence + " " + s + " " + fence
-	}
-	return fence + s + fence
+	a.send(chatID, fmt.Sprintf("🔗 Bound to: %s", a.sessionLabel(act.SessionID)))
 }
 
 // ---------------------------------------------------------------------------
