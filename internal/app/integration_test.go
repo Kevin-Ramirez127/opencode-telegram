@@ -835,7 +835,7 @@ func TestStatusUsesMarkdownAndVersion(t *testing.T) {
 	all := ftg.allText()
 	for _, want := range []string{
 		"**OpenCode disconnected**",
-		"- **Version:** `test`",
+		"- **Opencode-telegram version:** `test`",
 		"- **Endpoint:** `http",
 		"- **Allowlist:** 1 users, 1 chats",
 		"- **Notifications:** on",

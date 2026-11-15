@@ -248,7 +248,7 @@ func (a *App) showStatus(chatID int64) {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s **OpenCode %s**\n\n", icon, state)
-	fmt.Fprintf(&b, "- **Version:** %s\n", markdownCode(snap.Version))
+	fmt.Fprintf(&b, "- **Opencode-telegram version:** %s\n", markdownCode(snap.Version))
 	fmt.Fprintf(&b, "- **Endpoint:** %s\n", markdownCode(snap.OpenCodeURL))
 	if snap.OpenCodeVer != "" {
 		fmt.Fprintf(&b, "- **Server version:** %s\n", markdownCode(snap.OpenCodeVer))
