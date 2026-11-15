@@ -248,12 +248,12 @@ func (a *App) showStatus(chatID int64) {
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s **OpenCode %s**\n\n", icon, state)
-	fmt.Fprintf(&b, "- **Version:** `%s`\n", snap.Version)
-	fmt.Fprintf(&b, "- **Endpoint:** `%s`\n", snap.OpenCodeURL)
+	fmt.Fprintf(&b, "- **Version:** %s\n", markdownCode(snap.Version))
+	fmt.Fprintf(&b, "- **Endpoint:** %s\n", markdownCode(snap.OpenCodeURL))
 	if snap.OpenCodeVer != "" {
-		fmt.Fprintf(&b, "- **Server version:** `%s`\n", snap.OpenCodeVer)
+		fmt.Fprintf(&b, "- **Server version:** %s\n", markdownCode(snap.OpenCodeVer))
 	}
-	fmt.Fprintf(&b, "- **Daemon uptime:** `%s`\n", time.Duration(snap.UptimeSec)*time.Second)
+	fmt.Fprintf(&b, "- **Daemon uptime:** %s\n", markdownCode((time.Duration(snap.UptimeSec) * time.Second).String()))
 	fmt.Fprintf(&b, "- **Allowlist:** %d users, %d chats\n", snap.Users, snap.Chats)
 	fmt.Fprintf(&b, "- **Active sessions:** %d\n", snap.Active)
 	fmt.Fprintf(&b, "- **Pending questions:** %d\n", snap.PendingForm)
@@ -262,10 +262,10 @@ func (a *App) showStatus(chatID int64) {
 	if bound == "" {
 		b.WriteString("- **Bound session:** none\n")
 	} else {
-		fmt.Fprintf(&b, "- **Bound session:** %s\n", a.sessionLabel(bound))
+		fmt.Fprintf(&b, "- **Bound session:** %s\n", markdownInline(a.sessionLabel(bound)))
 	}
 	if snap.LastError != "" {
-		fmt.Fprintf(&b, "\n**Last error:** %s\n", snap.LastError)
+		fmt.Fprintf(&b, "\n**Last error:** %s\n", markdownInline(snap.LastError))
 	}
 	a.send(chatID, b.String())
 }
