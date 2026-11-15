@@ -817,6 +817,26 @@ func TestSettingsUsesMarkdown(t *testing.T) {
 	}
 }
 
+func TestStatusUsesMarkdownAndVersion(t *testing.T) {
+	a, ftg, _ := newIntegrationApp(t)
+
+	a.handleCommand(123, 123, "/status")
+
+	all := ftg.allText()
+	for _, want := range []string{
+		"**OpenCode disconnected**",
+		"- **Opencode-telegram version:** `test`",
+		"- **Endpoint:** `http",
+		"- **Allowlist:** 1 users, 1 chats",
+		"- **Notifications:** on",
+		"- **Bound session:** none",
+	} {
+		if !strings.Contains(all, want) {
+			t.Fatalf("status output missing %q:\n%s", want, all)
+		}
+	}
+}
+
 func allowNewMessages(t *testing.T, a *App) {
 	t.Helper()
 	on := true

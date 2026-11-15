@@ -1,9 +1,12 @@
-.PHONY: build run test vet fmt chmod-scripts install uninstall start stop restart status logs reload check config settings simulate
+.PHONY: build run test vet fmt chmod-scripts install update uninstall start stop restart status logs reload check config settings simulate
 
 BIN := bin/opencode-telegram
 
 install:
 	./install.sh
+
+update:
+	./update.sh $(ARGS)
 
 uninstall:
 	rm -f $(HOME)/.local/bin/opencode-telegram
@@ -43,7 +46,7 @@ simulate:
 	./scripts/simulate.sh $(SCENARIO)
 
 build:
-	go build -ldflags "-X main.version=$$(git describe --tags --always --dirty 2>/dev/null || echo dev)" -o $(BIN) .
+	go build -o $(BIN) .
 
 run: build
 	./$(BIN)
@@ -58,4 +61,4 @@ fmt:
 	gofmt -l -w .
 
 chmod-scripts:
-	chmod +x scripts/*.sh install.sh
+	chmod +x scripts/*.sh install.sh update.sh

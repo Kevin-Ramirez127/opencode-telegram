@@ -99,6 +99,9 @@ opencode-telegram logs -f
 opencode-telegram status
 opencode-telegram reload
 opencode-telegram stop
+
+# 4. Version
+opencode-telegram --version
 ```
 
 For a persistent user service:
@@ -108,6 +111,59 @@ For a persistent user service:
 # or copy packaging/opencode-telegram.service manually and:
 systemctl --user enable --now opencode-telegram
 ```
+
+### Updating
+
+Pull the repository, then run the updater from the checkout:
+
+```bash
+git pull
+./update.sh
+```
+
+The installed command does the same thing from anywhere, using the checkout
+recorded when you installed:
+
+```bash
+opencode-telegram update
+opencode-telegram update --pull
+opencode-telegram update --dry-run
+```
+
+Keep the original checkout around: the updater builds from it (binary, plugin,
+templates, `install.sh`). If it moved, re-run `./install.sh` from the new
+location once.
+
+The updater rebuilds and reinstalls the daemon and plugin in the same layout.
+Your state is kept: `.env`, `data/allowlist.json`, `data/settings.json`, logs,
+and any extra files in `data/` are never overwritten or deleted. Before doing
+anything it copies the previous binary, plugin, config, and data to
+`~/.local/share/opencode-telegram/backups/`. If the build, install, or
+verification fails, that backup is restored automatically. A running daemon is
+stopped and restarted in the same mode (wrapper or systemd user unit).
+
+Existing settings values always win. New keys added to
+`data/settings.example.json` are filled into your `settings.json`; that is the
+only user file the updater may extend.
+
+Useful options:
+
+```bash
+./update.sh --pull                # fetch + fast-forward origin/main first
+./update.sh --dry-run             # show what would change, touch nothing
+./update.sh --daemon              # only the daemon (or --plugin)
+./update.sh --no-restart          # update but leave the daemon stopped
+./update.sh --check               # also run go vet + go test
+./update.sh --keep 3              # keep the last 3 backups (default 5)
+./update.sh --list-backups
+./update.sh --rollback latest     # restore the newest backup and restart
+./update.sh --rollback <dir>      # restore a specific backup
+```
+
+`--rollback` also restores the `.env`, plugin, OpenCode config, and systemd
+unit captured by that backup. Both install and update honour `PREFIX`,
+`INSTALL_DIR`, and `APP_DIR`, so custom locations keep working. `make update`
+is a shorthand for `./update.sh`.
 
 ### Configuration
 
@@ -467,6 +523,7 @@ Layout:
 
 ```
 main.go                     wiring, flags, discovery
+VERSION                     app version, embedded in the binary at build time
 internal/config             env/.env + paths
 internal/occlient           OpenCode API client, SSE stream, discovery
 internal/app                daemon state, Telegram, forms, permissions, HTTP API
@@ -479,6 +536,7 @@ data/*.example.json         tracked allowlist/settings templates
 data/*.json                 local state (gitignored)
 scripts/daemon.sh           start/stop/logs/config/settings/simulate
 scripts/simulate.sh         premade Telegram QA conversations
+update.sh                   safe updater (keeps .env, data/, backs up first)
 packaging/                  systemd user unit
 ```
 

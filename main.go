@@ -20,11 +20,13 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -37,8 +39,13 @@ import (
 	"opencode-telegram/internal/whitelist"
 )
 
-// version is set at build time with -ldflags "-X main.version=...".
-var version = "dev"
+// version comes from the VERSION file embedded at build time, so `make build`,
+// install.sh and a plain `go build .` all report the same release version.
+//
+//go:embed VERSION
+var versionFile string
+
+var version = strings.TrimSpace(versionFile)
 
 func main() {
 	var (

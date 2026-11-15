@@ -247,24 +247,25 @@ func (a *App) showStatus(chatID int64) {
 	bound := a.binding(chatID)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s OpenCode %s\n", icon, state)
-	fmt.Fprintf(&b, "Endpoint: %s\n", snap.OpenCodeURL)
+	fmt.Fprintf(&b, "%s **OpenCode %s**\n\n", icon, state)
+	fmt.Fprintf(&b, "- **Opencode-telegram version:** %s\n", markdownCode(snap.Version))
+	fmt.Fprintf(&b, "- **Endpoint:** %s\n", markdownCode(snap.OpenCodeURL))
 	if snap.OpenCodeVer != "" {
-		fmt.Fprintf(&b, "Server version: %s\n", snap.OpenCodeVer)
+		fmt.Fprintf(&b, "- **Server version:** %s\n", markdownCode(snap.OpenCodeVer))
 	}
-	fmt.Fprintf(&b, "Daemon uptime: %s\n", time.Duration(snap.UptimeSec)*time.Second)
-	fmt.Fprintf(&b, "Allowlist: %d users, %d chats\n", snap.Users, snap.Chats)
-	fmt.Fprintf(&b, "Active sessions: %d\n", snap.Active)
-	fmt.Fprintf(&b, "Pending questions: %d\n", snap.PendingForm)
-	fmt.Fprintf(&b, "Pending permissions: %d\n", snap.PendingPerm)
-	fmt.Fprintf(&b, "Notifications: %s\n", onOff(st.Notifications.Enabled))
+	fmt.Fprintf(&b, "- **Daemon uptime:** %s\n", markdownCode((time.Duration(snap.UptimeSec) * time.Second).String()))
+	fmt.Fprintf(&b, "- **Allowlist:** %d users, %d chats\n", snap.Users, snap.Chats)
+	fmt.Fprintf(&b, "- **Active sessions:** %d\n", snap.Active)
+	fmt.Fprintf(&b, "- **Pending questions:** %d\n", snap.PendingForm)
+	fmt.Fprintf(&b, "- **Pending permissions:** %d\n", snap.PendingPerm)
+	fmt.Fprintf(&b, "- **Notifications:** %s\n", onOff(st.Notifications.Enabled))
 	if bound == "" {
-		b.WriteString("Bound session: none\n")
+		b.WriteString("- **Bound session:** none\n")
 	} else {
-		fmt.Fprintf(&b, "Bound session: %s\n", a.sessionLabel(bound))
+		fmt.Fprintf(&b, "- **Bound session:** %s\n", markdownInline(a.sessionLabel(bound)))
 	}
 	if snap.LastError != "" {
-		fmt.Fprintf(&b, "Last error: %s\n", snap.LastError)
+		fmt.Fprintf(&b, "\n**Last error:** %s\n", markdownInline(snap.LastError))
 	}
 	a.send(chatID, b.String())
 }
@@ -718,6 +719,49 @@ func (a *App) handleCallbackFrom(chatID int64, messageID int, data string) {
 func (a *App) bindFromCallback(chatID int64, act action) {
 	a.setBinding(chatID, act.SessionID)
 	a.send(chatID, fmt.Sprintf("🔗 Bound to: %s", a.sessionLabel(act.SessionID)))
+}
+
+// ---------------------------------------------------------------------------
+// Markdown helpers
+// ---------------------------------------------------------------------------
+
+// markdownInline escapes user-provided text so it can sit inside Markdown
+// prose (for example a bold session title) without breaking the surrounding
+// formatting. Session titles are arbitrary, and a stray * or _ used to make
+// the rich message fail to parse and fall back to raw plain text.
+func markdownInline(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for _, r := range s {
+		switch r {
+		case '\\', '`', '*', '_', '[', ']', '<', '>', '#', '|', '~', '{', '}', '(', ')', '+', '-', '.', '!':
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// markdownCode wraps text in a code span, extending the fence when the text
+// itself contains backticks. Paths and IDs stay literal (and copyable).
+func markdownCode(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	longest, run := 0, 0
+	for _, r := range s {
+		if r == '`' {
+			run++
+			if run > longest {
+				longest = run
+			}
+		} else {
+			run = 0
+		}
+	}
+	fence := strings.Repeat("`", longest+1)
+	if longest > 0 {
+		return fence + " " + s + " " + fence
+	}
+	return fence + s + fence
 }
 
 // ---------------------------------------------------------------------------

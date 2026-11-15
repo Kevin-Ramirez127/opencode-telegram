@@ -18,6 +18,12 @@
 #   ./scripts/daemon.sh config [options]       manage the user/chat allowlist
 #   ./scripts/daemon.sh settings [show|edit]   show or edit settings.json
 #   ./scripts/daemon.sh simulate [scenario]    send premade conversations to Telegram
+#   ./scripts/daemon.sh update [options]       rebuild + reinstall from the source checkout
+#   ./scripts/daemon.sh version                print the installed app version
+#   ./scripts/daemon.sh --version              alias for version
+#
+# update options: every ./update.sh flag, e.g. --dry-run, --pull, --rollback
+#   latest, --daemon, --plugin, --no-restart, --list-backups.
 #
 # simulate scenarios: text, done, failed, interrupted, question1, question2,
 #   question3, permission, retry, all (default), list.
@@ -37,6 +43,8 @@
 #   - Refuses to start without TELEGRAM_BOT_TOKEN (env or .env).
 #   - config edits data/allowlist.json atomically (backup .bak, mode 600) and
 #     reloads the running daemon with SIGHUP.
+#   - update runs <checkout>/update.sh, whose path install.sh records in
+#     .install-source; rerun ./install.sh if the checkout moved.
 #
 set -euo pipefail
 
@@ -355,6 +363,40 @@ cmd_simulate() {
   exec "$BIN" --simulate "$scenario"
 }
 
+# --- update ------------------------------------------------------------------
+# Reinstall from the checkout recorded by install.sh. The checkout owns the
+# build sources, plugin sources, templates and install.sh, so the updater must
+# run from there rather than from the installed copy.
+cmd_update() {
+  local meta="$ROOT/.install-source" repo prefix install_dir
+
+  if [[ -x "$ROOT/update.sh" && -f "$ROOT/install.sh" ]]; then
+    echo "using update source: $ROOT"
+    exec "$ROOT/update.sh" "$@"
+  fi
+
+  [[ -f "$meta" ]] || fail "update source is not recorded; run ./install.sh from the repository checkout once, then retry"
+  # shellcheck disable=SC1090
+  source "$meta"
+  repo="${SRC_REPO:-}"
+  prefix="${SRC_PREFIX:-$HOME/.local}"
+  install_dir="${SRC_INSTALL_DIR:-$prefix/bin}"
+  if [[ -z "$repo" || ! -x "$repo/update.sh" ]]; then
+    fail "updater not found at ${repo:-<unknown>}/update.sh — re-clone the repository and run ./install.sh (or use ./update.sh from the checkout)"
+  fi
+  echo "using update source: $repo"
+  APP_DIR="$ROOT" PREFIX="$prefix" INSTALL_DIR="$install_dir" exec "$repo/update.sh" "$@"
+}
+
+cmd_version() {
+  local v
+  if [[ -x "$BIN" ]]; then
+    exec "$BIN" --version
+  fi
+  v="$(sed -n 's/^version=//p' "$ROOT/.installed-version" 2>/dev/null | head -n1)"
+  printf 'opencode-telegram %s\n' "${v:-unknown}"
+}
+
 usage() {
   sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
 }
@@ -373,6 +415,8 @@ case "$cmd" in
   config)  cmd_config "$@" ;;
   settings) cmd_settings "${1:-show}" ;;
   simulate) cmd_simulate "${1:-all}" ;;
+  update)  cmd_update "$@" ;;
+  version|--version|-v) cmd_version ;;
   help|-h|--help|"") usage ;;
-  *) fail "unknown command '$cmd' (try: start|stop|restart|status|logs|reload|run|check|config|settings|simulate)" ;;
+  *) fail "unknown command '$cmd' (try: start|stop|restart|status|logs|reload|run|check|config|settings|simulate|update|version)" ;;
 esac
