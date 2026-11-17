@@ -563,4 +563,4 @@ See [`safe_bot_advices.md`](safe_bot_advices.md) for bot-specific hygiene.
 
 ## License
 
-GPL-3.0. See [LICENCE](LICENCE).
+MIT. See [LICENCE](LICENCE).
